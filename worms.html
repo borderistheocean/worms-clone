@@ -1,0 +1,545 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Worms PoC</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden;
+    font-family: monospace; color: #ddd; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #wrap { position: relative; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges;
+    width: 960px; height: 540px; background: #87ceeb; display: block;
+    box-shadow: 0 0 20px #000; cursor: crosshair; }
+  #hud { position: absolute; top: 8px; left: 12px; font-size: 12px;
+    text-shadow: 1px 1px 0 #000; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="480" height="270"></canvas>
+  <div id="hud">A/D or ←/→ move • W/Space/↑ jump • Left-click shoot • G throw grenade • Right-click crater • R regenerate</div>
+</div>
+<script>
+(() => {
+  const W = 480, H = 270;
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // Terrain grid: 1 = solid, 0 = empty
+  let grid = new Uint8Array(W * H);
+  // Offscreen image for terrain rendering
+  const terrainCanvas = document.createElement('canvas');
+  terrainCanvas.width = W; terrainCanvas.height = H;
+  const tctx = terrainCanvas.getContext('2d');
+  const terrainImg = tctx.createImageData(W, H);
+  let terrainDirty = true;
+
+  // Colors
+  const COL_DIRT     = [120, 72, 40, 255];
+  const COL_DIRT2    = [96,  56, 28, 255];
+  const COL_GRASS    = [70, 170, 60, 255];
+  const COL_GRASS_DK = [40, 110, 40, 255];
+  const COL_SKY      = [0, 0, 0, 0]; // transparent so canvas bg shows
+
+  function idx(x, y) { return y * W + x; }
+  function inBounds(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
+  function solid(x, y) {
+    if (x < 0 || x >= W) return true; // walls
+    if (y >= H) return true;          // floor
+    if (y < 0) return false;          // sky
+    return grid[idx(x, y)] === 1;
+  }
+
+  function generateTerrain() {
+    grid.fill(0);
+    // Stacked sines for rolling hills
+    const baseY = H * 0.55;
+    const seedA = Math.random() * 1000;
+    const seedB = Math.random() * 1000;
+    const seedC = Math.random() * 1000;
+    for (let x = 0; x < W; x++) {
+      const h = baseY
+        + Math.sin((x + seedA) * 0.012) * 40
+        + Math.sin((x + seedB) * 0.035) * 15
+        + Math.sin((x + seedC) * 0.08)  * 6;
+      const top = Math.max(20, Math.min(H - 1, Math.floor(h)));
+      for (let y = top; y < H; y++) grid[idx(x, y)] = 1;
+    }
+    // Carve some random caves so destruction has interesting interior
+    for (let i = 0; i < 6; i++) {
+      const cx = 60 + Math.random() * (W - 120);
+      const cy = baseY + 20 + Math.random() * 60;
+      const r  = 12 + Math.random() * 20;
+      carveCircle(cx, cy, r, false);
+    }
+    terrainDirty = true;
+  }
+
+  function carveCircle(cx, cy, r, runIsolation = true) {
+    const r2 = r * r;
+    const x0 = Math.max(0, Math.floor(cx - r));
+    const x1 = Math.min(W - 1, Math.ceil(cx + r));
+    const y0 = Math.max(0, Math.floor(cy - r));
+    const y1 = Math.min(H - 1, Math.ceil(cy + r));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx, dy = y - cy;
+        if (dx*dx + dy*dy <= r2) grid[idx(x, y)] = 0;
+      }
+    }
+    terrainDirty = true;
+    if (runIsolation) detachFloatingChunks();
+  }
+
+  // Falling chunks: pixels relative to (x,y) origin
+  const chunks = [];
+
+  function detachFloatingChunks() {
+    // Flood-fill from bottom row across all solid pixels
+    const visited = new Uint8Array(W * H);
+    const stack = [];
+    for (let x = 0; x < W; x++) {
+      const i = idx(x, H - 1);
+      if (grid[i] === 1) { visited[i] = 1; stack.push(x, H - 1); }
+    }
+    while (stack.length) {
+      const y = stack.pop();
+      const x = stack.pop();
+      // 4-neighbour
+      if (x > 0) {
+        const i = idx(x-1, y);
+        if (!visited[i] && grid[i] === 1) { visited[i] = 1; stack.push(x-1, y); }
+      }
+      if (x < W-1) {
+        const i = idx(x+1, y);
+        if (!visited[i] && grid[i] === 1) { visited[i] = 1; stack.push(x+1, y); }
+      }
+      if (y > 0) {
+        const i = idx(x, y-1);
+        if (!visited[i] && grid[i] === 1) { visited[i] = 1; stack.push(x, y-1); }
+      }
+      if (y < H-1) {
+        const i = idx(x, y+1);
+        if (!visited[i] && grid[i] === 1) { visited[i] = 1; stack.push(x, y+1); }
+      }
+    }
+    // Group unvisited solid pixels into connected components
+    const claimed = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = idx(x, y);
+        if (grid[i] !== 1 || visited[i] || claimed[i]) continue;
+        // BFS this component
+        const compPixels = [];
+        let minX = x, minY = y;
+        const st = [x, y];
+        claimed[i] = 1;
+        while (st.length) {
+          const py = st.pop(), px = st.pop();
+          compPixels.push(px, py);
+          if (px < minX) minX = px;
+          if (py < minY) minY = py;
+          const neigh = [[px-1,py],[px+1,py],[px,py-1],[px,py+1]];
+          for (const [nx, ny] of neigh) {
+            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+            const ni = idx(nx, ny);
+            if (grid[ni] === 1 && !visited[ni] && !claimed[ni]) {
+              claimed[ni] = 1; st.push(nx, ny);
+            }
+          }
+        }
+        // Convert to chunk
+        const pixels = new Int16Array(compPixels.length);
+        for (let k = 0; k < compPixels.length; k += 2) {
+          const gx = compPixels[k], gy = compPixels[k+1];
+          pixels[k]   = gx - minX;
+          pixels[k+1] = gy - minY;
+          grid[idx(gx, gy)] = 0; // remove from terrain
+        }
+        chunks.push({ pixels, x: minX, y: minY, vy: 0 });
+        terrainDirty = true;
+      }
+    }
+  }
+
+  function chunkCollides(chunk, ox, oy) {
+    const p = chunk.pixels;
+    for (let k = 0; k < p.length; k += 2) {
+      const gx = ox + p[k], gy = oy + p[k+1];
+      if (gy >= H) return true;
+      if (gx < 0 || gx >= W) return true;
+      if (gy >= 0 && grid[idx(gx, gy)] === 1) return true;
+    }
+    return false;
+  }
+
+  function stampChunk(chunk) {
+    const p = chunk.pixels;
+    for (let k = 0; k < p.length; k += 2) {
+      const gx = chunk.x + p[k], gy = chunk.y + p[k+1];
+      if (gy < 0 || gy >= H || gx < 0 || gx >= W) continue;
+      grid[idx(gx, gy)] = 1;
+    }
+    terrainDirty = true;
+  }
+
+  function updateChunks() {
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const c = chunks[i];
+      c.vy += 0.35;
+      if (c.vy > 6) c.vy = 6;
+      let remaining = c.vy;
+      while (remaining > 0) {
+        const step = Math.min(1, remaining);
+        if (chunkCollides(c, c.x, c.y + 1)) {
+          stampChunk(c);
+          chunks.splice(i, 1);
+          // Cascade: a landed chunk might now anchor or isolate things
+          detachFloatingChunks();
+          break;
+        }
+        c.y += 1;
+        remaining -= 1;
+      }
+    }
+  }
+
+  // Player
+  const player = {
+    x: W / 2, y: 20,
+    w: 6, h: 10,
+    vx: 0, vy: 0,
+    onGround: false,
+    facing: 1,
+  };
+
+  function playerCollidesAt(px, py) {
+    const x0 = Math.floor(px - player.w / 2);
+    const x1 = Math.floor(px + player.w / 2 - 0.001);
+    const y0 = Math.floor(py - player.h);
+    const y1 = Math.floor(py - 0.001);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (solid(x, y)) return true;
+      }
+    }
+    return false;
+  }
+
+  function updatePlayer() {
+    // Horizontal input
+    let ax = 0;
+    if (keys['arrowleft'] || keys['a']) ax -= 1;
+    if (keys['arrowright'] || keys['d']) ax += 1;
+    if (ax !== 0) player.facing = ax;
+    player.vx = ax * 0.7;
+
+    // Gravity
+    player.vy += 0.18;
+    if (player.vy > 5) player.vy = 5;
+
+    // Move X with sub-stepping; allow step-up of up to 2px to climb small bumps
+    let mx = player.vx;
+    const stepDir = mx > 0 ? 1 : -1;
+    let steps = Math.ceil(Math.abs(mx));
+    for (let s = 0; s < steps; s++) {
+      const tryX = player.x + stepDir;
+      if (!playerCollidesAt(tryX, player.y)) {
+        player.x = tryX;
+      } else {
+        // Try step-up
+        let climbed = false;
+        for (let up = 1; up <= 2; up++) {
+          if (!playerCollidesAt(tryX, player.y - up)) {
+            player.x = tryX;
+            player.y -= up;
+            climbed = true;
+            break;
+          }
+        }
+        if (!climbed) { player.vx = 0; break; }
+      }
+    }
+
+    // Move Y
+    let my = player.vy;
+    const ydir = my > 0 ? 1 : -1;
+    let ysteps = Math.ceil(Math.abs(my));
+    player.onGround = false;
+    for (let s = 0; s < ysteps; s++) {
+      const tryY = player.y + ydir;
+      if (!playerCollidesAt(player.x, tryY)) {
+        player.y = tryY;
+      } else {
+        if (ydir > 0) player.onGround = true;
+        player.vy = 0;
+        break;
+      }
+    }
+
+    // Jump (edge-triggered: must release and press again)
+    if (jumpQueued && player.onGround) {
+      player.vy = -2.8;
+      player.onGround = false;
+    }
+    jumpQueued = false;
+
+    // Don't fall out of world
+    if (player.y > H + 50) {
+      player.x = W / 2; player.y = 20; player.vx = 0; player.vy = 0;
+    }
+  }
+
+  // Rendering
+  function renderTerrain() {
+    const d = terrainImg.data;
+    // Reset to transparent
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 0;
+    }
+    // Find top-of-column for grass tinting
+    for (let x = 0; x < W; x++) {
+      let topY = -1;
+      for (let y = 0; y < H; y++) {
+        if (grid[idx(x, y)] === 1) { topY = y; break; }
+      }
+      if (topY < 0) continue;
+      for (let y = topY; y < H; y++) {
+        if (grid[idx(x, y)] !== 1) continue;
+        const di = (y * W + x) * 4;
+        let col;
+        const depth = y - topY;
+        if (depth === 0)        col = COL_GRASS;
+        else if (depth === 1)   col = COL_GRASS;
+        else if (depth === 2)   col = COL_GRASS_DK;
+        else if ((x + y) & 1)   col = COL_DIRT;
+        else                    col = COL_DIRT2;
+        d[di]   = col[0];
+        d[di+1] = col[1];
+        d[di+2] = col[2];
+        d[di+3] = col[3];
+      }
+    }
+    tctx.putImageData(terrainImg, 0, 0);
+    terrainDirty = false;
+  }
+
+  function render() {
+    // Sky already from CSS background, but clear canvas to sky too
+    ctx.fillStyle = '#87ceeb';
+    ctx.fillRect(0, 0, W, H);
+    // Sun
+    ctx.fillStyle = '#fff7cc';
+    ctx.beginPath(); ctx.arc(W - 50, 40, 18, 0, Math.PI * 2); ctx.fill();
+
+    if (terrainDirty) renderTerrain();
+    ctx.drawImage(terrainCanvas, 0, 0);
+
+    // Falling chunks
+    for (const c of chunks) {
+      const p = c.pixels;
+      ctx.fillStyle = '#8a4828';
+      for (let k = 0; k < p.length; k += 2) {
+        ctx.fillRect(c.x + p[k], c.y + p[k+1], 1, 1);
+      }
+    }
+
+    // Bullets
+    ctx.fillStyle = '#ffeb66';
+    for (const b of bullets) {
+      ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 2, 2);
+    }
+
+    // Grenades (blink faster as fuse runs out)
+    for (const g of grenades) {
+      const blink = g.fuse < 30 ? (g.fuse >> 1) & 1 : ((g.fuse >> 3) & 1);
+      ctx.fillStyle = blink ? '#ff4444' : '#2a2a2a';
+      ctx.fillRect(Math.floor(g.x) - 1, Math.floor(g.y) - 1, 3, 3);
+    }
+
+    // Player
+    const px = Math.floor(player.x - player.w / 2);
+    const py = Math.floor(player.y - player.h);
+    ctx.fillStyle = '#ffd9b3';
+    ctx.fillRect(px, py, player.w, 4); // head
+    ctx.fillStyle = '#cc3030';
+    ctx.fillRect(px, py + 4, player.w, player.h - 4); // body
+    // eye
+    ctx.fillStyle = '#000';
+    ctx.fillRect(px + (player.facing > 0 ? player.w - 2 : 1), py + 1, 1, 1);
+    // Gun barrel pointing at cursor
+    const gx0 = player.x;
+    const gy0 = player.y - player.h / 2;
+    const adx = mouseX - gx0, ady = mouseY - gy0;
+    const alen = Math.hypot(adx, ady) || 1;
+    const gx1 = gx0 + (adx / alen) * 6;
+    const gy1 = gy0 + (ady / alen) * 6;
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(gx0, gy0); ctx.lineTo(gx1, gy1);
+    ctx.stroke();
+
+    // Aim reticle
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(mouseX, mouseY, 14, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mouseX - 3, mouseY); ctx.lineTo(mouseX + 3, mouseY);
+    ctx.moveTo(mouseX, mouseY - 3); ctx.lineTo(mouseX, mouseY + 3);
+    ctx.stroke();
+  }
+
+  // Input
+  const keys = Object.create(null);
+  let jumpQueued = false;
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    const wasDown = keys[k];
+    if (!wasDown && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = true;
+    if (!wasDown && k === 'g') throwGrenade();
+    keys[k] = true;
+    if (k === 'r') generateTerrain();
+    if (e.key === ' ') e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  let mouseX = 0, mouseY = 0;
+  function setMouseFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = Math.floor((e.clientX - rect.left) * (W / rect.width));
+    mouseY = Math.floor((e.clientY - rect.top)  * (H / rect.height));
+  }
+  canvas.addEventListener('mousemove', setMouseFromEvent);
+  canvas.addEventListener('mousedown', e => {
+    setMouseFromEvent(e);
+    if (e.button === 2) {
+      // Right-click: instant crater (kept for terrain experimentation)
+      carveCircle(mouseX, mouseY, 14, true);
+    } else {
+      fireBullet();
+    }
+  });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Bullets
+  const bullets = [];
+  function fireBullet() {
+    const muzzleX = player.x;
+    const muzzleY = player.y - player.h / 2;
+    const dx = mouseX - muzzleX;
+    const dy = mouseY - muzzleY;
+    const len = Math.hypot(dx, dy) || 1;
+    const speed = 4.5;
+    bullets.push({
+      x: muzzleX,
+      y: muzzleY,
+      vx: (dx / len) * speed,
+      vy: (dy / len) * speed,
+      life: 120,
+    });
+    player.facing = dx >= 0 ? 1 : -1;
+  }
+
+  // Grenades
+  const grenades = [];
+  function throwGrenade() {
+    const mx0 = player.x;
+    const my0 = player.y - player.h / 2;
+    const dx = mouseX - mx0;
+    const dy = mouseY - my0;
+    const len = Math.hypot(dx, dy) || 1;
+    const power = 3.2;
+    grenades.push({
+      x: mx0,
+      y: my0,
+      vx: (dx / len) * power,
+      vy: (dy / len) * power - 0.5, // slight upward bias for an arc
+      fuse: 120, // ~2s at 60fps
+    });
+    player.facing = dx >= 0 ? 1 : -1;
+  }
+
+  function grenadeSolidAt(gx, gy) {
+    if (gx < 0 || gx >= W) return true;
+    if (gy >= H) return true;
+    if (gy < 0) return false;
+    return grid[idx(gx, gy)] === 1;
+  }
+
+  function updateGrenades() {
+    for (let i = grenades.length - 1; i >= 0; i--) {
+      const g = grenades[i];
+      g.vy += 0.18;
+      if (g.vy > 5) g.vy = 5;
+
+      // Sub-step movement with axis-separated collision so it bounces off walls/floor naturally
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(g.vx), Math.abs(g.vy))));
+      for (let s = 0; s < steps; s++) {
+        // X
+        const nx = g.x + g.vx / steps;
+        if (grenadeSolidAt(Math.floor(nx), Math.floor(g.y))) {
+          g.vx = -g.vx * 0.5;
+        } else {
+          g.x = nx;
+        }
+        // Y
+        const ny = g.y + g.vy / steps;
+        if (grenadeSolidAt(Math.floor(g.x), Math.floor(ny))) {
+          if (g.vy > 0) g.vy = -g.vy * 0.45;
+          else g.vy = -g.vy * 0.5;
+          g.vx *= 0.8; // friction on landing
+        } else {
+          g.y = ny;
+        }
+      }
+
+      g.fuse--;
+      if (g.fuse <= 0) {
+        carveCircle(g.x, g.y, 22, true);
+        grenades.splice(i, 1);
+      }
+    }
+  }
+
+  function updateBullets() {
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      // Sub-step so fast bullets don't tunnel
+      const steps = Math.ceil(Math.max(Math.abs(b.vx), Math.abs(b.vy)));
+      let hit = false;
+      for (let s = 0; s < steps; s++) {
+        b.x += b.vx / steps;
+        b.y += b.vy / steps;
+        const gx = Math.floor(b.x), gy = Math.floor(b.y);
+        if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        if (gy >= 0 && grid[idx(gx, gy)] === 1) {
+          carveCircle(gx, gy, 6, true);
+          hit = true;
+          break;
+        }
+      }
+      b.life--;
+      if (hit || b.life <= 0) bullets.splice(i, 1);
+    }
+  }
+
+  // Boot
+  generateTerrain();
+
+  function loop() {
+    updateChunks();
+    updatePlayer();
+    updateBullets();
+    updateGrenades();
+    render();
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
