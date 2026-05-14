@@ -482,10 +482,20 @@
       }
     }
 
-    // Bullets
-    ctx.fillStyle = '#ffeb66';
+    // UFOs + lasers (above clouds/terrain, below player projectiles)
+    renderUfos();
+    renderLasers();
+
+    // Bullets — small round amber pellet inside a dark ring for visibility
     for (const b of bullets) {
-      ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 2, 2);
+      ctx.fillStyle = '#3a1f00';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffaa10';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 0.9, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Blood pixels in flight
@@ -494,14 +504,21 @@
       ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 1, 1);
     }
 
-    // Rockets — a small dark body with a flickering yellow flame tail
+    // Rockets — chunky dark body with a flickering flame tail
     for (const r of rockets) {
       const sp = Math.hypot(r.vx, r.vy) || 1;
-      const tx = r.x - (r.vx / sp) * 3;
-      const ty = r.y - (r.vy / sp) * 3;
+      const ux = r.vx / sp, uy = r.vy / sp;
+      // Two-pixel flame tail
+      const t1x = Math.floor(r.x - ux * 3), t1y = Math.floor(r.y - uy * 3);
+      const t2x = Math.floor(r.x - ux * 5), t2y = Math.floor(r.y - uy * 5);
       ctx.fillStyle = (Math.random() < 0.5) ? '#ffd040' : '#ff7020';
-      ctx.fillRect(Math.floor(tx), Math.floor(ty), 1, 1);
-      ctx.fillStyle = '#222';
+      ctx.fillRect(t1x, t1y, 2, 2);
+      ctx.fillStyle = (Math.random() < 0.5) ? '#ff5010' : '#a03000';
+      ctx.fillRect(t2x, t2y, 1, 1);
+      // Outline + body
+      ctx.fillStyle = '#000';
+      ctx.fillRect(Math.floor(r.x) - 1, Math.floor(r.y) - 1, 4, 4);
+      ctx.fillStyle = '#5a5a5a';
       ctx.fillRect(Math.floor(r.x), Math.floor(r.y), 2, 2);
     }
 
@@ -735,6 +752,8 @@
     if (k === 'r') {
       generateTerrain();
       spawnTrees();
+      resetWaves();
+      lasers.length = 0;
       player.hp = MAX_HP;
       player.dead = false;
       player.deathTimer = 0;
@@ -900,6 +919,7 @@
         r.y += r.vy / steps;
         const gx = Math.floor(r.x), gy = Math.floor(r.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        { const u = ufoAt(r.x, r.y); if (u) { damageUfo(u, 4); hit = true; break; } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
       }
       r.life--;
@@ -983,6 +1003,7 @@
         b.y += b.vy / steps;
         const gx = Math.floor(b.x), gy = Math.floor(b.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        { const u = ufoAt(b.x, b.y); if (u) { damageUfo(u, 1); hit = true; break; } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           carveCircle(gx, gy, 6, true);
           hit = true;
@@ -1167,11 +1188,273 @@
     }
   }
 
+  // UFO enemies --------------------------------------------------------------
+  const UFO_W = 24, UFO_H = 10;
+  const UFO_BASE_HP = 6;
+  const ufos = [];
+  const lasers = [];
+  // Wave progression: 1 ship → 3 ships (2× HP) → 5 ships (3× HP) → done.
+  const WAVES = [
+    { count: 1, hpMult: 1 },
+    { count: 3, hpMult: 2 },
+    { count: 5, hpMult: 3 },
+  ];
+  let waveIndex = 0;
+  let interWaveDelay = 0; // ticks until next wave spawns after the current is cleared
+
+  function spawnWave(count, hpMult) {
+    for (let i = 0; i < count; i++) {
+      const maxHp = UFO_BASE_HP * hpMult;
+      const baseY = 22 + Math.random() * 18;
+      ufos.push({
+        x: 20 + Math.random() * (W - 40),
+        // Start off the top of the screen and fly down to baseY.
+        y: -10 - i * 8 - Math.random() * 6,
+        vx: (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.2),
+        bob: Math.random() * 6.28,
+        bobSpeed: 0.035 + Math.random() * 0.03,
+        baseY,
+        hp: maxHp, maxHp,
+        cooldown: 60 + ((Math.random() * 120) | 0),
+        hitFlash: 0,
+        state: 'entering',     // 'entering' | 'alive' | 'falling'
+        vy: 0,
+      });
+    }
+  }
+  function resetWaves() {
+    ufos.length = 0;
+    waveIndex = 0;
+    interWaveDelay = 0;
+    spawnWave(WAVES[0].count, WAVES[0].hpMult);
+  }
+  function damageUfo(u, dmg) {
+    if (u.state !== 'alive') return;
+    u.hp -= dmg;
+    u.hitFlash = 6;
+    if (u.hp <= 0) {
+      u.hp = 0;
+      u.state = 'falling';
+      u.vy = 0.5 + Math.random() * 0.5;
+    }
+  }
+  function ufoAt(x, y) {
+    // Returns the first alive UFO whose bounds contain (x,y), or null.
+    for (const u of ufos) {
+      if (u.state !== 'alive') continue;
+      if (Math.abs(x - u.x) <= UFO_W / 2 && Math.abs(y - u.y) <= UFO_H / 2 + 1) return u;
+    }
+    return null;
+  }
+  function fireLaser(u) {
+    const sx = u.x;
+    const sy = u.y + UFO_H / 2;
+    const tx = player.x;
+    const ty = player.y - player.h / 2;
+    const dx = tx - sx, dy = ty - sy;
+    const len = Math.hypot(dx, dy) || 1;
+    const speed = 2.2;
+    lasers.push({
+      x: sx, y: sy,
+      vx: (dx / len) * speed,
+      vy: (dy / len) * speed,
+      life: 240,
+    });
+  }
+  function updateUfos() {
+    for (let i = ufos.length - 1; i >= 0; i--) {
+      const u = ufos[i];
+      if (u.hitFlash > 0) u.hitFlash--;
+      if (u.state === 'entering') {
+        // Fly in from above to the bobbing altitude.
+        u.y += 0.9;
+        if (u.y >= u.baseY) {
+          u.y = u.baseY;
+          u.state = 'alive';
+        }
+        continue;
+      }
+      if (u.state === 'falling') {
+        // Spiral / plummet. No more shooting.
+        u.vy += 0.18;
+        if (u.vy > 5) u.vy = 5;
+        u.y += u.vy;
+        u.x += u.vx * 0.4; // drifts as it falls
+        // Sample several columns across the saucer's belly so a wide hull
+        // still detects ground contact even if u.x is over a small gap.
+        const belly = u.y + UFO_H / 2;
+        const gy = Math.floor(belly);
+        let inTerrain = gy >= H;
+        if (!inTerrain) {
+          for (let dx = -UFO_W / 2; dx <= UFO_W / 2; dx += 2) {
+            const gx = Math.floor(u.x + dx);
+            if (gx >= 0 && gx < W && gy >= 0 && grid[idx(gx, gy)] === 1) {
+              inTerrain = true; break;
+            }
+          }
+        }
+        if (inTerrain || u.y > H + 20) {
+          // Guaranteed grenade-strength blast on impact, with extra trauma
+          // for a satisfying crash even if the saucer fell off-screen.
+          explode(u.x, Math.min(H - 1, belly), 22, 60, 70, 1.0);
+          ufos.splice(i, 1);
+        }
+        continue;
+      }
+      // Alive — drift toward staying within a band around the player's column
+      u.bob += u.bobSpeed;
+      const desiredX = Math.max(20, Math.min(W - 20, player.x));
+      const dx = desiredX - u.x;
+      if (Math.abs(dx) > 30) u.vx += Math.sign(dx) * 0.008;
+      u.vx = Math.max(-0.6, Math.min(0.6, u.vx));
+      u.x += u.vx;
+      if (u.x < 12) { u.x = 12; u.vx = Math.abs(u.vx); }
+      if (u.x > W - 12) { u.x = W - 12; u.vx = -Math.abs(u.vx); }
+      u.y = u.baseY + Math.sin(u.bob) * 6;
+      // Shoot at player periodically
+      if (!player.dead) {
+        u.cooldown--;
+        if (u.cooldown <= 0) {
+          fireLaser(u);
+          u.cooldown = 95 + ((Math.random() * 40) | 0);
+        }
+      }
+    }
+    // Wave progression — once the field is empty and we have more waves,
+    // wait a short beat then spawn the next.
+    if (ufos.length === 0 && waveIndex < WAVES.length - 1) {
+      if (interWaveDelay <= 0) interWaveDelay = 180;
+      else if (--interWaveDelay === 0) {
+        waveIndex++;
+        const w = WAVES[waveIndex];
+        spawnWave(w.count, w.hpMult);
+      }
+    }
+  }
+  function updateLasers() {
+    for (let i = lasers.length - 1; i >= 0; i--) {
+      const L = lasers[i];
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(L.vx), Math.abs(L.vy))));
+      let dead = false;
+      for (let s = 0; s < steps; s++) {
+        L.x += L.vx / steps;
+        L.y += L.vy / steps;
+        const gx = Math.floor(L.x), gy = Math.floor(L.y);
+        if (gx < 0 || gx >= W || gy >= H) { dead = true; break; }
+        // Hit terrain → small crater
+        if (gy >= 0 && grid[idx(gx, gy)] === 1) {
+          carveCircle(gx, gy, 4, true);
+          flashes.push({ x: gx, y: gy, r: 4, maxLife: 6, life: 6, color: '#ff5050' });
+          dead = true; break;
+        }
+        // Hit player
+        if (!player.dead) {
+          const pcx = player.x, pcy = player.y - player.h / 2;
+          if (Math.abs(L.x - pcx) < 3 && Math.abs(L.y - pcy) < player.h / 2 + 1) {
+            player.hp = Math.max(0, player.hp - 12);
+            if (player.hp === 0) { player.dead = true; player.deathTimer = 0; }
+            // Splash of blood
+            for (let k = 0; k < 8; k++) {
+              const ang = Math.random() * Math.PI * 2;
+              const sp = 1 + Math.random() * 2;
+              bloods.push({
+                x: pcx, y: pcy + (Math.random() - 0.5) * 4,
+                vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 0.5,
+                life: 60,
+              });
+            }
+            dead = true; break;
+          }
+        }
+      }
+      L.life--;
+      if (dead || L.life <= 0) lasers.splice(i, 1);
+    }
+  }
+  function renderUfos() {
+    for (const u of ufos) {
+      ctx.save();
+      // Falling ones tumble and trail smoke
+      if (u.state === 'falling') {
+        ctx.translate(u.x, u.y);
+        ctx.rotate(Math.sin(u.y * 0.1) * 0.6);
+        ctx.translate(-u.x, -u.y);
+        // Smoke puffs trailing upward as it falls
+        if ((Math.random() < 0.6)) {
+          flashes.push({
+            x: u.x + (Math.random() - 0.5) * 6,
+            y: u.y - 2 + Math.random() * 4,
+            r: 2 + Math.random() * 1.5,
+            maxLife: 20, life: 20,
+            color: 'rgba(40,40,40,0.7)',
+          });
+        }
+      }
+      const x = u.x, y = u.y;
+      // Saucer base — dark slab so it reads well against the sky
+      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#222';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 2, UFO_W / 2, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Underbelly stripe (slightly lighter rim)
+      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3a3a3a';
+      ctx.fillRect(Math.floor(x - UFO_W / 2 + 1), Math.floor(y + 1), UFO_W - 2, 1);
+      // Dome — dark teal so it pops against blue sky without glowing
+      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#1d3a55';
+      ctx.beginPath();
+      ctx.arc(x, y + 1, 5, Math.PI, 0);
+      ctx.fill();
+      // Dome highlight
+      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3b6f9c';
+      ctx.fillRect(Math.floor(x - 2), Math.floor(y - 3), 1, 1);
+      // Underside lights
+      const tt = (windT * 0.15) | 0;
+      const cols = ['#ffe040', '#ff4060', '#40e0ff'];
+      const lightYs = Math.floor(y + 4);
+      [-7, -2, 3, 8].forEach((dx, i) => {
+        ctx.fillStyle = cols[(tt + i) % cols.length];
+        ctx.fillRect(Math.floor(x + dx), lightYs, 1, 1);
+      });
+      // HP bar — only while alive
+      if (u.state === 'alive') {
+        const hpW = UFO_W;
+        const hpx = Math.floor(x - hpW / 2);
+        const hpy = Math.floor(y - 8);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(hpx - 1, hpy - 1, hpW + 2, 3);
+        ctx.fillStyle = u.hp > u.maxHp * 0.5 ? '#3ad14a'
+                       : u.hp > u.maxHp * 0.2 ? '#e0c020'
+                       : '#d03030';
+        ctx.fillRect(hpx, hpy, Math.round((u.hp / u.maxHp) * hpW), 1);
+      }
+      ctx.restore();
+    }
+  }
+  function renderLasers() {
+    for (const L of lasers) {
+      const sp = Math.hypot(L.vx, L.vy) || 1;
+      const ux = L.vx / sp, uy = L.vy / sp;
+      const hx = Math.floor(L.x), hy = Math.floor(L.y);
+      // Dark halo so the bolt reads on a bright sky
+      ctx.fillStyle = '#3a0000';
+      ctx.fillRect(hx - 1, hy - 1, 4, 4);
+      // Trail (darker red further back)
+      ctx.fillStyle = '#a01818';
+      ctx.fillRect(Math.floor(L.x - ux * 4), Math.floor(L.y - uy * 4), 2, 2);
+      ctx.fillStyle = '#e02020';
+      ctx.fillRect(Math.floor(L.x - ux * 2), Math.floor(L.y - uy * 2), 2, 2);
+      // Bright head
+      ctx.fillStyle = '#ffd0d0';
+      ctx.fillRect(hx, hy, 2, 2);
+    }
+  }
+
   spawnClouds();
 
   // Boot
   generateTerrain();
   spawnTrees();
+  resetWaves();
 
   const TIME_SCALE = 0.6; // <1 = slower world; render still runs every frame
   const SLOWMO_SCALE = 0.15;
@@ -1195,6 +1478,8 @@
       updateBullets();
       updateRockets();
       updateGrenades();
+      updateUfos();
+      updateLasers();
       updateBloods();
       updateFlashes();
     }
