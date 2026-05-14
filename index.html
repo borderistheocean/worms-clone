@@ -332,7 +332,11 @@
     if (keys['arrowleft'] || keys['a']) ax -= 1;
     if (keys['arrowright'] || keys['d']) ax += 1;
     if (player.jumpCharge > 0) ax = 0;
-    player.vx = ax * (player.ducking ? 0.45 : 0.7);
+    // During bullet-time the world ticks slower, which makes the player feel
+    // glued to the ground — give them a per-tick boost so they still move at
+    // a usable pace through the slow-mo.
+    const moveBoost = slowmoActive() ? 2.2 : 1;
+    player.vx = ax * (player.ducking ? 0.45 : 0.7) * moveBoost;
     // Advance walk phase only when actually moving on the ground
     if (ax !== 0 && player.onGround) player.walkPhase++;
     else player.walkPhase = 0;
