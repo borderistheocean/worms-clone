@@ -877,6 +877,29 @@
     ctx.stroke();
     }
 
+    // Builder energy meter — only while BUILDER is equipped.
+    if (weapon === 'builder' && !player.dead) {
+      const mW = 80, mH = 4;
+      const mx = Math.floor((W - mW) / 2);
+      const my = H - 38;
+      const frac = builderEnergy / BUILDER_MAX_MS;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(mx - 1, my - 1, mW + 2, mH + 2);
+      ctx.fillStyle = builderLocked ? '#7a4818'
+                     : frac < 0.2    ? '#a04040'
+                                     : '#caa070';
+      ctx.fillRect(mx, my, Math.round(mW * frac), mH);
+      ctx.font = '7px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#000';
+      ctx.fillText('BUILD', W / 2 + 1, my);
+      ctx.fillStyle = '#ffe0b0';
+      ctx.fillText('BUILD', W / 2, my - 1);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
+
     // Slow-mo screen filter — a cool blue tint with vignette at the edges
     if (slowmoActive()) {
       ctx.fillStyle = 'rgba(80,140,220,0.18)';
@@ -1153,6 +1176,8 @@
       finalElapsedMs = null;
       hits = 0;
       slowmoEnergy = SLOWMO_MAX_MS;
+      builderEnergy = BUILDER_MAX_MS;
+      builderLocked = false;
       playerHitFlash = 0;
       introTimer = 240;
       waveBannerTime = 0;
@@ -1355,18 +1380,85 @@
     player.facing = dx >= 0 ? 1 : -1;
   }
 
+  // Blocky brush — paints a (2*half+1)x(2*half+1) square of dirt anchored to
+  // existing terrain. The wide square edge gives the new chunk a solid bite
+  // into the surface so it doesn't dangle as a thin appendage.
+  function fillBlock(cx, cy, half) {
+    const x0 = Math.max(0, Math.floor(cx - half));
+    const x1 = Math.min(W - 1, Math.floor(cx + half));
+    const y0 = Math.max(0, Math.floor(cy - half));
+    const y1 = Math.min(H - 1, Math.floor(cy + half));
+    const pad = 1;
+    const pxL = Math.floor(player.x - player.w / 2) - pad;
+    const pxR = Math.floor(player.x + player.w / 2) + pad;
+    const pyT = Math.floor(player.y - player.h) - pad;
+    const pyB = Math.floor(player.y) + pad;
+    const candidates = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (grid[idx(x, y)] !== 0) continue;
+        if (!player.dead && x >= pxL && x <= pxR && y >= pyT && y <= pyB) continue;
+        candidates.push(x, y);
+      }
+    }
+    // Iteratively claim cells touching existing solid terrain; anything that
+    // never connects is skipped (no floating fragments).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let k = candidates.length - 2; k >= 0; k -= 2) {
+        const x = candidates[k], y = candidates[k + 1];
+        if (grid[idx(x, y)] === 1) continue;
+        if ((x > 0     && grid[idx(x - 1, y)] === 1) ||
+            (x < W - 1 && grid[idx(x + 1, y)] === 1) ||
+            (y > 0     && grid[idx(x, y - 1)] === 1) ||
+            (y < H - 1 && grid[idx(x, y + 1)] === 1)) {
+          grid[idx(x, y)] = 1;
+          changed = true;
+        }
+      }
+    }
+    terrainDirty = true;
+  }
+
+  // Builder energy — drains while firing the builder, recharges otherwise.
+  // 2s of use, 4s to fully recharge from empty. Locks out at 0 until the
+  // meter refills to 50%.
+  const BUILDER_MAX_MS = 2000;
+  const BUILDER_RECHARGE_MS = 4000;
+  const BUILDER_RELOCK_FRAC = 0.5;
+  let builderEnergy = BUILDER_MAX_MS;
+  let builderLocked = false;
+  let builderLastMs = Date.now();
+  function builderHeldNow() {
+    return firingHeld && weapon === 'builder' && !player.dead && !paused && !builderLocked;
+  }
+  function updateBuilderEnergy() {
+    const now = Date.now();
+    const dt = now - builderLastMs;
+    builderLastMs = now;
+    if (builderHeldNow() && builderEnergy > 0) {
+      builderEnergy = Math.max(0, builderEnergy - dt);
+      if (builderEnergy === 0) builderLocked = true;
+    } else {
+      builderEnergy = Math.min(BUILDER_MAX_MS,
+        builderEnergy + dt * (BUILDER_MAX_MS / BUILDER_RECHARGE_MS));
+      if (builderLocked && builderEnergy >= BUILDER_MAX_MS * BUILDER_RELOCK_FRAC) {
+        builderLocked = false;
+      }
+    }
+  }
+
   function fireBuildBullet() {
+    if (builderLocked || builderEnergy <= 0) return;
     const muzzleX = player.x;
     const muzzleY = player.y - player.h / 2;
     const dx = mouseX - muzzleX;
     const dy = mouseY - muzzleY;
     const len = Math.hypot(dx, dy) || 1;
-    // Builder works directly from the crosshair: try to place terrain at the
-    // cursor. fillCircle only paints pixels connected to existing terrain, so
-    // shots into open sky simply do nothing.
-    fillCircle(mouseX, mouseY, 4);
+    // Builder paints a chunky 11x11 square brush anchored to existing terrain.
+    fillBlock(mouseX, mouseY, 5);
     flashes.push({ x: mouseX, y: mouseY, r: 3, maxLife: 8, life: 8, color: '#caa070' });
-    // Small muzzle flash at the gun tip for feedback
     flashes.push({
       x: muzzleX + (dx / len) * 7,
       y: muzzleY + (dy / len) * 7,
@@ -2333,6 +2425,7 @@
   let tickAccum = 0;
   function loop() {
     updateSlowmoEnergy();
+    updateBuilderEnergy();
     if (paused) {
       tickAccum = 0;
     } else if (hitStopFrames > 0) {
