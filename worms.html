@@ -448,6 +448,9 @@
     ctx.fillStyle = '#fff7cc';
     ctx.beginPath(); ctx.arc(W - 50, 40, 18, 0, Math.PI * 2); ctx.fill();
 
+    // Clouds drift in front of the sun but behind everything else
+    renderClouds();
+
     if (terrainDirty) renderTerrain();
 
     // Explosion flashes — drawn BEFORE terrain so they glow from inside the
@@ -466,6 +469,9 @@
     ctx.globalAlpha = 1;
 
     ctx.drawImage(terrainCanvas, 0, 0);
+
+    // Static trees on top of terrain — sway with current wind
+    renderTrees(windNow());
 
     // Falling chunks
     for (const c of chunks) {
@@ -728,6 +734,7 @@
     keys[k] = true;
     if (k === 'r') {
       generateTerrain();
+      spawnTrees();
       player.hp = MAX_HP;
       player.dead = false;
       player.deathTimer = 0;
@@ -994,8 +1001,177 @@
   }
   updateWeaponHud();
 
+  // Wind / clouds / trees ---------------------------------------------------
+  let windT = 0;
+  function windNow() {
+    // Slow base breeze + faster gentle ripple. Range roughly [-1.4, 1.4].
+    return Math.sin(windT * 0.006) * 1.0 + Math.sin(windT * 0.021) * 0.4;
+  }
+
+  const clouds = [];
+  function spawnClouds() {
+    clouds.length = 0;
+    for (let i = 0; i < 5; i++) {
+      clouds.push({
+        x: Math.random() * W,
+        y: 10 + Math.random() * 60,
+        scale: 0.7 + Math.random() * 0.9,
+        speed: 0.06 + Math.random() * 0.08,
+      });
+    }
+  }
+
+  const trees = [];
+  function spawnTrees() {
+    trees.length = 0;
+    const count = 6 + ((Math.random() * 4) | 0);
+    for (let i = 0; i < count; i++) {
+      const tx = Math.floor(20 + Math.random() * (W - 40));
+      const top = groundTopAt(tx);
+      if (top < 0) continue; // no ground here, skip
+      trees.push({
+        x: tx,
+        rootY: top,                              // current surface position of the trunk base
+        vy: 0,                                   // vertical velocity when terrain drops away
+        h:   6 + ((Math.random() * 5) | 0),     // trunk height
+        cw:  5 + ((Math.random() * 3) | 0),     // canopy half-width
+        ch:  5 + ((Math.random() * 3) | 0),     // canopy half-height
+        sway: Math.random() * 6.28,             // phase offset so they don't all sway in lockstep
+        falling: false,
+        fallen: false,
+        angle: 0,                                // 0 = upright; +π/2 = flat to the right
+        angVel: 0,
+        dir: 1,                                  // which way it topples
+      });
+    }
+  }
+  function groundTopAt(x) {
+    if (x < 0 || x >= W) return -1;
+    for (let y = 0; y < H; y++) if (grid[idx(x, y)] === 1) return y;
+    return -1;
+  }
+  function renderClouds() {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    for (const c of clouds) {
+      // Cloud built from a few overlapping circles
+      const r = 6 * c.scale;
+      ctx.beginPath();
+      ctx.arc(c.x,        c.y,        r,        0, Math.PI * 2);
+      ctx.arc(c.x + r,    c.y - r*0.3, r*0.9,   0, Math.PI * 2);
+      ctx.arc(c.x - r*0.8,c.y,         r*0.7,   0, Math.PI * 2);
+      ctx.arc(c.x + r*1.7,c.y + r*0.1, r*0.7,   0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  function updateTrees() {
+    for (let i = trees.length - 1; i >= 0; i--) {
+      const t = trees[i];
+      if (t.fallen) {
+        t.fadeT = (t.fadeT || 0) + 1;
+        if (t.fadeT > 90) trees.splice(i, 1);
+        continue;
+      }
+
+      // Vertical follow: if the ground at this column has dropped (or vanished),
+      // pull the tree down with gravity until it rests on the new surface.
+      const top = groundTopAt(t.x);
+      if (top < 0) {
+        // No ground in this column at all — free fall.
+        t.vy += 0.18;
+        if (t.vy > 5) t.vy = 5;
+        t.rootY += t.vy;
+        if (t.rootY > H + 20) { trees.splice(i, 1); continue; }
+      } else if (top > t.rootY) {
+        // Ground has receded below the trunk base — fall to catch up.
+        t.vy += 0.18;
+        if (t.vy > 5) t.vy = 5;
+        t.rootY = Math.min(top, t.rootY + t.vy);
+        if (t.rootY === top) t.vy = 0;
+      } else {
+        // top <= rootY: ground is at or above the trunk base — settled.
+        t.vy = 0;
+        t.rootY = top; // ride small surface bumps
+      }
+
+      if (!t.falling) {
+        // Lateral support check — sample ground a few pixels either side of
+        // the trunk. If one side is much lower (or gone) we've got an
+        // overhang and the tree should topple toward that void.
+        const leftTop  = groundTopAt(t.x - 3);
+        const rightTop = groundTopAt(t.x + 3);
+        const leftBad  = leftTop  < 0 || leftTop  > t.rootY + 4;
+        const rightBad = rightTop < 0 || rightTop > t.rootY + 4;
+        if (leftBad || rightBad) {
+          t.falling = true;
+          if (leftBad && !rightBad) t.dir = -1;
+          else if (rightBad && !leftBad) t.dir = 1;
+          else t.dir = windNow() >= 0 ? 1 : -1;
+          t.angVel = 0.005 * t.dir;
+        }
+      } else {
+        t.angVel += 0.012 * t.dir;
+        t.angle += t.angVel;
+        if (Math.abs(t.angle) >= Math.PI / 2) {
+          t.angle = (Math.PI / 2) * t.dir;
+          t.falling = false;
+          t.fallen = true;
+        }
+      }
+    }
+  }
+
+  function updateClouds(w) {
+    for (const c of clouds) {
+      c.x += c.speed + w * 0.4;
+      const span = 30 * c.scale;
+      if (c.x - span > W) c.x = -span;
+      if (c.x + span < 0) c.x = W + span;
+    }
+  }
+  function renderTrees(w) {
+    for (const t of trees) {
+      // rootY is kept up-to-date in updateTrees (follows the surface with
+      // gravity), so we can just render at the current rootY in every state.
+      const baseY = t.rootY;
+      const sway = (t.falling || t.fallen)
+        ? 0
+        : Math.round(w * 2.2 * Math.sin(windT * 0.04 + t.sway));
+
+      ctx.save();
+      ctx.translate(t.x, baseY);
+      if (t.angle !== 0) ctx.rotate(t.angle);
+      if (t.fallen) ctx.globalAlpha = Math.max(0, 1 - (t.fadeT || 0) / 90);
+
+      // Trunk grows upward from the pivot.
+      ctx.fillStyle = '#5a3a18';
+      for (let i = 0; i < t.h; i++) {
+        const dx = (t.falling || t.fallen) ? 0 : Math.round((i / t.h) * sway);
+        ctx.fillRect(dx,     -i - 1, 1, 1);
+        ctx.fillRect(dx + 1, -i - 1, 1, 1);
+      }
+      // Canopy centred above the trunk.
+      const cy = -t.h - t.ch + 1;
+      const cx = (t.falling || t.fallen) ? 0 : sway;
+      ctx.fillStyle = '#2c8a3a';
+      for (let y = -t.ch; y <= t.ch; y++) {
+        for (let x = -t.cw; x <= t.cw; x++) {
+          const d = (x*x) / (t.cw*t.cw) + (y*y) / (t.ch*t.ch);
+          if (d <= 1) ctx.fillRect(cx + x, cy + y, 1, 1);
+        }
+      }
+      ctx.fillStyle = '#4cb050';
+      ctx.fillRect(cx - 1, cy - t.ch + 1, 1, 1);
+      ctx.fillRect(cx + 1, cy - t.ch + 2, 1, 1);
+
+      ctx.restore();
+    }
+  }
+
+  spawnClouds();
+
   // Boot
   generateTerrain();
+  spawnTrees();
 
   const TIME_SCALE = 0.6; // <1 = slower world; render still runs every frame
   const SLOWMO_SCALE = 0.15;
@@ -1011,6 +1187,9 @@
       } else if (fireCooldown > 0) {
         fireCooldown--;
       }
+      windT++;
+      updateClouds(windNow());
+      updateTrees();
       updateChunks();
       updatePlayer();
       updateBullets();
