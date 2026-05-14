@@ -568,15 +568,21 @@
   // Boot
   generateTerrain();
 
+  const TIME_SCALE = 0.6; // <1 = slower world; render still runs every frame
+  let tickAccum = 0;
   function loop() {
-    if (firingHeld) {
-      if (fireCooldown <= 0) { fireBullet(); fireCooldown = FIRE_INTERVAL; }
-      else fireCooldown--;
+    tickAccum += TIME_SCALE;
+    while (tickAccum >= 1) {
+      tickAccum -= 1;
+      if (firingHeld) {
+        if (fireCooldown <= 0) { fireBullet(); fireCooldown = FIRE_INTERVAL; }
+        else fireCooldown--;
+      }
+      updateChunks();
+      updatePlayer();
+      updateBullets();
+      updateGrenades();
     }
-    updateChunks();
-    updatePlayer();
-    updateBullets();
-    updateGrenades();
     render();
     requestAnimationFrame(loop);
   }
