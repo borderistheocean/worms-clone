@@ -410,6 +410,12 @@
       ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 2, 2);
     }
 
+    // Blood pixels in flight
+    ctx.fillStyle = '#c8121a';
+    for (const b of bloods) {
+      ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 1, 1);
+    }
+
     // Muzzle flashes (drawn over everything, including sky)
     for (const f of flashes) {
       if (f.explosion) continue;
@@ -542,6 +548,38 @@
     shakeTrauma = Math.max(0, shakeTrauma - 0.06);
   }
 
+  // Blood pixels — single-pixel particles that arc out and stick on landing
+  const bloods = [];
+  function updateBloods() {
+    for (let i = bloods.length - 1; i >= 0; i--) {
+      const b = bloods[i];
+      b.vy += 0.18;
+      if (b.vy > 5) b.vy = 5;
+      b.vx *= 0.995;
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(b.vx), Math.abs(b.vy))));
+      let dead = false;
+      for (let s = 0; s < steps; s++) {
+        const nx = b.x + b.vx / steps;
+        const ny = b.y + b.vy / steps;
+        const gx = Math.floor(nx), gy = Math.floor(ny);
+        if (gx < 0 || gx >= W || gy >= H) { dead = true; break; }
+        if (gy >= 0 && grid[idx(gx, gy)] === 1) {
+          // Paint blood onto terrain at the impact spot
+          const px = Math.floor(b.x), py = Math.floor(b.y);
+          if (inBounds(px, py)) {
+            // Stamp a red pixel on the terrain image directly
+            tctx.fillStyle = '#a01020';
+            tctx.fillRect(px, py, 1, 1);
+          }
+          dead = true; break;
+        }
+        b.x = nx; b.y = ny;
+      }
+      b.life--;
+      if (dead || b.life <= 0) bloods.splice(i, 1);
+    }
+  }
+
   // Grenades
   const grenades = [];
   function throwGrenade() {
@@ -601,6 +639,27 @@
         flashes.push({ x: g.x, y: g.y, r: 14, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
         flashes.push({ x: g.x, y: g.y, r: 18, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
         addShake(0.85);
+        // Blood: if player is within blast radius, spray pixels outward from the blast
+        const pcx = player.x, pcy = player.y - player.h / 2;
+        const ddx = pcx - g.x, ddy = pcy - g.y;
+        const dist = Math.hypot(ddx, ddy);
+        const BLAST_R = 32;
+        if (dist < BLAST_R) {
+          const intensity = 1 - dist / BLAST_R;
+          const count = 14 + Math.floor(intensity * 26);
+          for (let k = 0; k < count; k++) {
+            const ang = Math.atan2(ddy || (Math.random() - 0.5), ddx || (Math.random() - 0.5))
+              + (Math.random() - 0.5) * 1.4;
+            const speed = 1 + Math.random() * 3 + intensity * 1.5;
+            bloods.push({
+              x: pcx + (Math.random() - 0.5) * 2,
+              y: pcy + (Math.random() - 0.5) * 4,
+              vx: Math.cos(ang) * speed,
+              vy: Math.sin(ang) * speed - Math.random() * 1.5,
+              life: 60 + (Math.random() * 40) | 0,
+            });
+          }
+        }
         grenades.splice(i, 1);
       }
     }
@@ -645,6 +704,7 @@
       updatePlayer();
       updateBullets();
       updateGrenades();
+      updateBloods();
       updateFlashes();
     }
     render();
