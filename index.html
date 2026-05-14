@@ -16,15 +16,15 @@
   canvas { image-rendering: pixelated; image-rendering: crisp-edges;
     width: 100%; height: 100%; background: #87ceeb; display: block;
     box-shadow: 0 0 20px #000; cursor: none; }
-  #hud { position: absolute; top: 8px; left: 12px; font-size: 12px;
-    text-shadow: 1px 1px 0 #000; pointer-events: none; }
+  #hud { margin-top: 8px; text-align: center; font-size: 12px;
+    color: #ddd; pointer-events: none; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="c" width="480" height="270"></canvas>
-  <div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • 1 pistol / 2 MG / 3 bazooka • Left-click shoot • Right-click slow-mo • R regenerate<br><span id="weap"></span></div>
 </div>
+<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • R regenerate • P pause</div>
 <script>
 (() => {
   const W = 480, H = 270;
@@ -249,6 +249,7 @@
   const MAX_HP = 100;
   let playerHitFlash = 0;   // 0..1, ticks down — drives the red damage overlay
   let introTimer = 240;     // ticks remaining for the "TRY 'N' SURVIVE" intro
+  let paused = false;
   const player = {
     x: W / 2, y: 20,
     w: 6, h: 10,
@@ -296,14 +297,43 @@
         if (!playerCollidesAt(player.x, tryY)) player.y = tryY;
         else { player.vy = 0; break; }
       }
+      // Big initial burst on the first dead-tick: blood spray everywhere plus
+      // a stamped pool on the terrain beneath the body.
+      if (player.deathTimer === 0) {
+        for (let k = 0; k < 40; k++) {
+          const ang = Math.random() * Math.PI * 2;
+          const sp = 1.2 + Math.random() * 2.8;
+          bloods.push({
+            x: player.x + (Math.random() - 0.5) * player.h,
+            y: player.y - player.h / 2 + (Math.random() - 0.5) * 4,
+            vx: Math.cos(ang) * sp,
+            vy: Math.sin(ang) * sp - 1.2,
+            life: 90 + (Math.random() * 60) | 0,
+          });
+        }
+        // Pool stamp on terrain right beneath the corpse
+        const py = Math.floor(player.y);
+        for (let dx = -4; dx <= 4; dx++) {
+          const tx = Math.floor(player.x) + dx;
+          if (tx < 0 || tx >= W) continue;
+          for (let y = py; y < Math.min(H, py + 2); y++) {
+            if (grid[idx(tx, y)] === 1) {
+              tctx.fillStyle = '#a01020';
+              tctx.fillRect(tx, y, 1, 1);
+              break;
+            }
+          }
+        }
+      }
       player.deathTimer++;
-      // Slow drip: a single pixel every ~25 ticks, near the body, leaking sideways/down
-      if ((player.deathTimer % 25) === 0) {
+      // Heavy bleeding for the first ~1 second, then slow drip.
+      const bleedRate = player.deathTimer < 60 ? 5 : 25;
+      if ((player.deathTimer % bleedRate) === 0) {
         bloods.push({
           x: player.x + (Math.random() - 0.5) * player.h,
           y: player.y - 1,
-          vx: (Math.random() - 0.5) * 0.4,
-          vy: 0.3 + Math.random() * 0.4,
+          vx: (Math.random() - 0.5) * 0.6,
+          vy: 0.3 + Math.random() * 0.6,
           life: 90,
         });
       }
@@ -518,13 +548,32 @@
     renderLasers();
     renderPacks();
 
-    // Bullets — small round amber pellet inside a dark ring for visibility
+    // Player laser beam — thick red glow with bright core, fades over life.
+    for (const beam of playerBeams) {
+      const t = beam.life / beam.maxLife;
+      ctx.globalAlpha = t;
+      ctx.strokeStyle = '#5a0010';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(beam.x0, beam.y0); ctx.lineTo(beam.x1, beam.y1); ctx.stroke();
+      ctx.strokeStyle = '#ff2030';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(beam.x0, beam.y0); ctx.lineTo(beam.x1, beam.y1); ctx.stroke();
+      ctx.strokeStyle = '#fff0f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(beam.x0, beam.y0); ctx.lineTo(beam.x1, beam.y1); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Bullets — small round pellet inside a dark ring for visibility.
+    // Builder bullets are tan/brown so the player can tell construction shots
+    // apart from regular fire.
     for (const b of bullets) {
-      ctx.fillStyle = '#3a1f00';
+      const isBuild = b.kind === 'build';
+      ctx.fillStyle = isBuild ? '#3a1f00' : '#3a1f00';
       ctx.beginPath();
       ctx.arc(b.x, b.y, 1.6, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#ffaa10';
+      ctx.fillStyle = isBuild ? '#caa070' : '#ffaa10';
       ctx.beginPath();
       ctx.arc(b.x, b.y, 0.9, 0, Math.PI * 2);
       ctx.fill();
@@ -580,14 +629,27 @@
       const lx = Math.floor(player.x - lw / 2);
       const ly = Math.floor(player.y - lh);
       const headRight = player.facing > 0;
-      ctx.fillStyle = '#cc3030';
-      ctx.fillRect(lx, ly, lw, lh); // body slab
-      ctx.fillStyle = '#ffd9b3';
-      ctx.fillRect(headRight ? lx + lw - 4 : lx, ly, 4, lh); // head
-      // X eye
+      // Body — duller, slightly stained red so it reads as a corpse
+      ctx.fillStyle = '#7a1818';
+      ctx.fillRect(lx, ly, lw, lh);
+      // Head — pale skin
+      ctx.fillStyle = '#e6b894';
+      ctx.fillRect(headRight ? lx + lw - 4 : lx, ly, 4, lh);
+      // Mouth — a tiny dark line, slack
+      ctx.fillStyle = '#3a1010';
+      ctx.fillRect(headRight ? lx + lw - 2 : lx + 1, ly + lh - 1, 1, 1);
+      // X eye — 2px cross to sell "dead worm"
       ctx.fillStyle = '#000';
-      const eyeX = headRight ? lx + lw - 2 : lx + 1;
-      ctx.fillRect(eyeX, ly + 1, 1, 1);
+      const exC = headRight ? lx + lw - 2 : lx + 1;
+      const eyC = ly;
+      ctx.fillRect(exC,     eyC,     1, 1);
+      ctx.fillRect(exC + 1, eyC + 1, 1, 1);
+      ctx.fillRect(exC,     eyC + 1, 0, 0); // placeholder for clarity
+      ctx.fillRect(exC + 1, eyC,     1, 1);
+      ctx.fillRect(exC,     eyC + 1, 1, 1);
+      // Stuck-out tongue pixel near the mouth for added drama
+      ctx.fillStyle = '#c83040';
+      ctx.fillRect(headRight ? lx + lw : lx - 1, ly + lh - 1, 1, 1);
     } else {
       const crouched = player.jumpCharge > 0;
       const squish = crouched ? 2 : 0;             // body compresses by 2px when crouching
@@ -755,6 +817,38 @@
       ctx.fillRect(6, -2, 2, 4);              // muzzle ring
       ctx.fillStyle = '#222';
       ctx.fillRect(1, 2, 2, 2);               // grip
+    } else if (weapon === 'laser') {
+      // Sleek dark emitter with a glowing red lens at the tip
+      ctx.fillStyle = '#1a1a22';
+      ctx.fillRect(0, -1, 7, 2);              // emitter body
+      ctx.fillStyle = '#5a0010';
+      ctx.fillRect(6, -2, 2, 4);              // lens housing
+      ctx.fillStyle = '#ff2030';
+      ctx.fillRect(7, -1, 1, 2);              // glowing lens
+      ctx.fillStyle = '#3a3a4a';
+      ctx.fillRect(0, -2, 3, 1);              // top rail
+      ctx.fillStyle = '#222';
+      ctx.fillRect(2, 1, 2, 3);               // grip
+    } else if (weapon === 'builder') {
+      // Stubby tan funnel — barrel + wider muzzle
+      ctx.fillStyle = '#7a4818';
+      ctx.fillRect(0, -1, 5, 2);              // barrel
+      ctx.fillStyle = '#caa070';
+      ctx.fillRect(5, -2, 2, 4);              // wider muzzle
+      ctx.fillStyle = '#222';
+      ctx.fillRect(1, 1, 2, 3);               // grip
+    } else if (weapon === 'dualmg') {
+      // Two stacked barrels, yellow accents, mag underneath
+      ctx.fillStyle = '#2a2a2a';
+      ctx.fillRect(0, -2, 9, 1);              // upper barrel
+      ctx.fillRect(0,  1, 9, 1);              // lower barrel
+      ctx.fillStyle = '#ffd820';
+      ctx.fillRect(7, -2, 2, 1);              // upper barrel tip
+      ctx.fillRect(7,  1, 2, 1);              // lower barrel tip
+      ctx.fillStyle = '#444';
+      ctx.fillRect(0, -1, 9, 2);              // receiver between barrels
+      ctx.fillStyle = '#222';
+      ctx.fillRect(2, 2, 3, 3);               // magazine
     }
     ctx.restore();
 
@@ -786,7 +880,7 @@
     {
       const mW = 80, mH = 4;
       const mx = Math.floor((W - mW) / 2);
-      const my = H - 10;
+      const my = H - 24;
       const frac = slowmoEnergy / SLOWMO_MAX_MS;
       const needed = slowmoActive() || frac < 0.999;
       if (needed) slowmoBarAlpha = 1;
@@ -850,46 +944,70 @@
       ctx.textBaseline = 'middle';
       ctx.font = 'bold 26px monospace';
       ctx.fillStyle = '#000';
-      ctx.fillText("TRY 'N' SURVIVE", W / 2 + 2, H / 2 - 18);
+      ctx.fillText("TRY 'N' SURVIVE", W / 2 + 2, H / 2 + 2);
       ctx.fillStyle = '#ffe060';
-      ctx.fillText("TRY 'N' SURVIVE", W / 2, H / 2 - 20);
+      ctx.fillText("TRY 'N' SURVIVE", W / 2, H / 2);
       ctx.globalAlpha = 1;
       ctx.textAlign = 'start';
       ctx.textBaseline = 'alphabetic';
     }
 
-    // Game-over overlay
+    // Pause overlay — block of "PAUSED" + hint centred around the middle.
+    if (paused) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const blockH = 28 + 8 + 10;          // title height + gap + hint height
+      const titleY = H / 2 - blockH / 2 + 14;
+      const hintY  = titleY + 28;
+      ctx.font = 'bold 28px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText('PAUSED', W / 2 + 2, titleY + 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('PAUSED', W / 2, titleY);
+      ctx.font = '10px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText('Press P to resume', W / 2 + 1, hintY + 1);
+      ctx.fillStyle = '#cfe8ff';
+      ctx.fillText('Press P to resume', W / 2, hintY);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // Game-over overlay — title + stat lines + reload hint, centred as a block.
     if (player.dead) {
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(0, 0, W, H);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      // GAME OVER
-      ctx.fillStyle = '#000';
-      ctx.font = 'bold 32px monospace';
-      ctx.fillText('GAME OVER', W / 2 + 1, H / 2 - 9);
-      ctx.fillStyle = '#ff3030';
-      ctx.fillText('GAME OVER', W / 2, H / 2 - 10);
-      // Stats
-      ctx.font = '10px monospace';
-      const lines = [
+      const stats = [
         'Survived: ' + survivedString(),
         'Hits: ' + hits,
         'Score: ' + currentScore(),
       ];
-      lines.forEach((line, i) => {
-        const ly = H / 2 + 14 + i * 12;
-        ctx.fillStyle = '#000';
-        ctx.fillText(line, W / 2 + 1, ly + 1);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(line, W / 2, ly);
-      });
-      // Press R
-      const pry = H / 2 + 14 + lines.length * 12 + 6;
+      const titleH = 32, gapAfterTitle = 16, statH = 12, gapAfterStats = 14, hintH = 10;
+      const blockH = titleH + gapAfterTitle + stats.length * statH + gapAfterStats + hintH;
+      let y = H / 2 - blockH / 2 + titleH / 2;
+      ctx.font = 'bold 32px monospace';
       ctx.fillStyle = '#000';
-      ctx.fillText('Press R to reload', W / 2 + 1, pry + 1);
+      ctx.fillText('GAME OVER', W / 2 + 1, y + 1);
+      ctx.fillStyle = '#ff3030';
+      ctx.fillText('GAME OVER', W / 2, y);
+      y += titleH / 2 + gapAfterTitle;
+      ctx.font = '10px monospace';
+      stats.forEach(line => {
+        ctx.fillStyle = '#000';
+        ctx.fillText(line, W / 2 + 1, y + 1);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(line, W / 2, y);
+        y += statH;
+      });
+      y += gapAfterStats - statH;
+      ctx.fillStyle = '#000';
+      ctx.fillText('Press R to reload', W / 2 + 1, y + 1);
       ctx.fillStyle = '#ffe060';
-      ctx.fillText('Press R to reload', W / 2, pry);
+      ctx.fillText('Press R to reload', W / 2, y);
       ctx.textAlign = 'start';
       ctx.textBaseline = 'alphabetic';
     }
@@ -903,27 +1021,43 @@
       ctx.fillRect(hpx - 1, hpy - 1, hpW + 2, 3);
       ctx.fillStyle = player.hp > 50 ? '#3ad14a' : player.hp > 20 ? '#e0c020' : '#d03030';
       ctx.fillRect(hpx, hpy, Math.round((player.hp / MAX_HP) * hpW), 1);
+
+      // Reload bar — appears above the HP bar while the active weapon is on
+      // cooldown. Blue fill that grows from empty back to full.
+      const interval = WEAPONS[weapon].interval;
+      if (fireCooldown > 0 && interval > 0) {
+        const filled = 1 - fireCooldown / interval;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(hpx - 1, hpy - 6, hpW + 2, 3);
+        ctx.fillStyle = '#3ab0ff';
+        ctx.fillRect(hpx, hpy - 5, Math.round(filled * hpW), 1);
+      }
     }
   }
 
   // Weapons
   const WEAPONS = {
-    pistol:  { name: 'PISTOL',  fire: fireBullet, interval: 24, auto: false },
     mg:      { name: 'MG',      fire: fireBullet, interval: 5,  auto: true  },
     bazooka: { name: 'BAZOOKA', fire: fireRocket, interval: 55, auto: false },
+    dualmg:  { name: 'DUAL MG', fire: fireDualBullet, interval: 6,  auto: true  },
+    builder: { name: 'BUILDER', fire: fireBuildBullet, interval: 6, auto: true  },
+    laser:   { name: 'LASER',   fire: firePlayerLaser, interval: 150, auto: false },
   };
-  const WEAPON_ORDER = ['pistol', 'mg', 'bazooka'];
+  const DEBUG = new URLSearchParams(location.search).get('debug') === 'true';
+  const WEAPON_ORDER = ['mg', 'bazooka', 'dualmg', 'builder', 'laser'];
+  let unlockedWeapons = new Set(['mg', 'bazooka']);
   let weapon = 'mg';
   let weaponLabelTime = 0; // ticks remaining for the on-screen weapon name
   function switchWeapon(name) {
-    if (!WEAPONS[name] || weapon === name) return;
+    if (!WEAPONS[name] || weapon === name || !unlockedWeapons.has(name)) return;
     weapon = name;
     weaponLabelTime = 90; // ~1.5s visible before fading
     updateWeaponHud();
   }
   function cycleWeapon(dir) {
-    const i = WEAPON_ORDER.indexOf(weapon);
-    const next = WEAPON_ORDER[(i + dir + WEAPON_ORDER.length) % WEAPON_ORDER.length];
+    const order = WEAPON_ORDER.filter(w => unlockedWeapons.has(w));
+    const i = order.indexOf(weapon);
+    const next = order[(i + dir + order.length) % order.length];
     switchWeapon(next);
   }
 
@@ -937,14 +1071,24 @@
   window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     const wasDown = keys[k];
+    // P toggles pause. Everything else is suppressed while paused, so a held
+    // key from before the pause doesn't keep moving the player on resume.
+    if (!wasDown && k === 'p') { paused = !paused; keys[k] = true; return; }
+    if (paused) { if (e.key === ' ') e.preventDefault(); return; }
     if (!wasDown && !player.dead && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = JUMP_BUFFER;
     if (!wasDown && !player.dead && k === 'e' && !player.cooking) {
       player.cooking = true;
       player.cookTime = 0;
     }
-    if (!wasDown && k === '1') switchWeapon('pistol');
-    if (!wasDown && k === '2') switchWeapon('mg');
-    if (!wasDown && k === '3') switchWeapon('bazooka');
+    if (!wasDown && k === '1') {
+      if (DEBUG) { unlockedWeapons.add('builder'); switchWeapon('builder'); }
+      else        switchWeapon('mg');
+    }
+    if (!wasDown && k === '2') {
+      if (DEBUG) { unlockedWeapons.add('laser'); switchWeapon('laser'); }
+      else        switchWeapon('bazooka');
+    }
+    if (!wasDown && k === '3') switchWeapon('dualmg');
     keys[k] = true;
     if (k === 'r') {
       generateTerrain();
@@ -958,6 +1102,12 @@
       slowmoEnergy = SLOWMO_MAX_MS;
       playerHitFlash = 0;
       introTimer = 240;
+      firstKillDropUsed = false;
+      fourthKillDropUsed = false;
+      sixthKillDropUsed = false;
+      killCount = 0;
+      unlockedWeapons = new Set(['mg', 'bazooka']);
+      if (!unlockedWeapons.has(weapon)) { weapon = 'mg'; updateWeaponHud(); }
       player.hp = MAX_HP;
       player.dead = false;
       player.deathTimer = 0;
@@ -982,13 +1132,14 @@
 
   let mouseX = 0, mouseY = 0;
   function setMouseFromEvent(e) {
+    if (paused) return;
     const rect = canvas.getBoundingClientRect();
     mouseX = Math.floor((e.clientX - rect.left) * (W / rect.width));
     mouseY = Math.floor((e.clientY - rect.top)  * (H / rect.height));
   }
   window.addEventListener('mousemove', setMouseFromEvent);
   window.addEventListener('wheel', e => {
-    if (player.dead) return;
+    if (player.dead || paused) return;
     cycleWeapon(e.deltaY > 0 ? 1 : -1);
     e.preventDefault();
   }, { passive: false });
@@ -998,11 +1149,16 @@
   // Bullet-time meter: 10s of use, 5s to recharge from empty.
   const SLOWMO_MAX_MS = 10000;
   const SLOWMO_RECHARGE_MS = 5000;
+  const SLOWMO_RELOCK_FRAC = 0.5; // must recharge to 50% before usable again
   let slowmoEnergy = SLOWMO_MAX_MS;
   let slowmoLastMs = Date.now();
   let slowmoBarAlpha = 0;
+  // When the meter hits 0 it locks out and can't be triggered again until it
+  // recharges past SLOWMO_RELOCK_FRAC — otherwise the meter just jitters at
+  // zero while the button stays held.
+  let slowmoLocked = false;
   function slowmoActive() {
-    return slowmoHeld && slowmoEnergy > 0 && !player.dead;
+    return slowmoHeld && !slowmoLocked && slowmoEnergy > 0 && !player.dead;
   }
   function updateSlowmoEnergy() {
     const now = Date.now();
@@ -1010,8 +1166,12 @@
     slowmoLastMs = now;
     if (slowmoActive()) {
       slowmoEnergy = Math.max(0, slowmoEnergy - dt);
+      if (slowmoEnergy === 0) slowmoLocked = true;
     } else {
       slowmoEnergy = Math.min(SLOWMO_MAX_MS, slowmoEnergy + dt * (SLOWMO_MAX_MS / SLOWMO_RECHARGE_MS));
+      if (slowmoLocked && slowmoEnergy >= SLOWMO_MAX_MS * SLOWMO_RELOCK_FRAC) {
+        slowmoLocked = false;
+      }
     }
   }
   window.addEventListener('mousedown', e => {
@@ -1059,6 +1219,132 @@
       color: '#ffe066',
     });
     addShake(0.75);
+    player.facing = dx >= 0 ? 1 : -1;
+  }
+
+  // Paint a disc of terrain — but only pixels that end up connected (directly
+  // or transitively) to existing terrain inside the disc, so the placed dirt
+  // is always anchored to something solid.
+  function fillCircle(cx, cy, r) {
+    const r2 = r * r;
+    const x0 = Math.max(0, Math.floor(cx - r));
+    const x1 = Math.min(W - 1, Math.ceil(cx + r));
+    const y0 = Math.max(0, Math.floor(cy - r));
+    const y1 = Math.min(H - 1, Math.ceil(cy + r));
+    // Exclude pixels overlapping the player so building near yourself can't
+    // entomb you. Inflate the box by 1px for breathing room.
+    const pad = 1;
+    const pxL = Math.floor(player.x - player.w / 2) - pad;
+    const pxR = Math.floor(player.x + player.w / 2) + pad;
+    const pyT = Math.floor(player.y - player.h) - pad;
+    const pyB = Math.floor(player.y) + pad;
+    const candidates = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy > r2) continue;
+        if (grid[idx(x, y)] !== 0) continue;
+        if (!player.dead && x >= pxL && x <= pxR && y >= pyT && y <= pyB) continue;
+        candidates.push(x, y);
+      }
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let k = candidates.length - 2; k >= 0; k -= 2) {
+        const x = candidates[k], y = candidates[k + 1];
+        if (grid[idx(x, y)] === 1) continue;
+        if ((x > 0     && grid[idx(x - 1, y)] === 1) ||
+            (x < W - 1 && grid[idx(x + 1, y)] === 1) ||
+            (y > 0     && grid[idx(x, y - 1)] === 1) ||
+            (y < H - 1 && grid[idx(x, y + 1)] === 1)) {
+          grid[idx(x, y)] = 1;
+          changed = true;
+        }
+      }
+    }
+    terrainDirty = true;
+  }
+
+  // Player laser beam: visible for a few frames so the player sees the cut.
+  const playerBeams = [];
+  function firePlayerLaser() {
+    const x0 = player.x, y0 = player.y - player.h / 2;
+    const dx = mouseX - x0, dy = mouseY - y0;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    // Step 1px at a time across the canvas, carving terrain and hitting UFOs.
+    const MAX_STEPS = Math.ceil(Math.hypot(W, H));
+    let endX = x0, endY = y0;
+    for (let s = 1; s <= MAX_STEPS; s++) {
+      const px = x0 + ux * s;
+      const py = y0 + uy * s;
+      if (px < 0 || px >= W || py >= H || py < -20) { endX = px; endY = py; break; }
+      endX = px; endY = py;
+      // Damage UFOs the beam crosses
+      const u = ufoAt(px, py);
+      if (u) damageUfo(u, u.maxHp);
+      // Carve terrain along the beam
+      if (py >= 0) {
+        const gx = Math.floor(px), gy = Math.floor(py);
+        if (gx >= 0 && gx < W && grid[idx(gx, gy)] === 1) {
+          carveCircle(gx, gy, 7, false);
+        }
+      }
+    }
+    detachFloatingChunks();
+    playerBeams.push({ x0, y0, x1: endX, y1: endY, life: 14, maxLife: 14 });
+    addShake(1.0);
+    player.facing = dx >= 0 ? 1 : -1;
+  }
+
+  function fireBuildBullet() {
+    const muzzleX = player.x;
+    const muzzleY = player.y - player.h / 2;
+    const dx = mouseX - muzzleX;
+    const dy = mouseY - muzzleY;
+    const len = Math.hypot(dx, dy) || 1;
+    // Builder works directly from the crosshair: try to place terrain at the
+    // cursor. fillCircle only paints pixels connected to existing terrain, so
+    // shots into open sky simply do nothing.
+    fillCircle(mouseX, mouseY, 4);
+    flashes.push({ x: mouseX, y: mouseY, r: 3, maxLife: 8, life: 8, color: '#caa070' });
+    // Small muzzle flash at the gun tip for feedback
+    flashes.push({
+      x: muzzleX + (dx / len) * 7,
+      y: muzzleY + (dy / len) * 7,
+      r: 3, maxLife: 4, life: 4,
+      color: '#caa070',
+    });
+    addShake(0.25);
+    player.facing = dx >= 0 ? 1 : -1;
+  }
+
+  function fireDualBullet() {
+    const muzzleX = player.x;
+    const muzzleY = player.y - player.h / 2;
+    const dx = mouseX - muzzleX;
+    const dy = mouseY - muzzleY;
+    const len = Math.hypot(dx, dy) || 1;
+    const speed = 4.5;
+    // Perpendicular offset so the two bullets fly side-by-side, not overlapping.
+    const nx = -dy / len, ny = dx / len;
+    for (const off of [-1, 1]) {
+      bullets.push({
+        x: muzzleX + nx * off,
+        y: muzzleY + ny * off,
+        vx: (dx / len) * speed,
+        vy: (dy / len) * speed,
+        life: 120,
+      });
+    }
+    flashes.push({
+      x: muzzleX + (dx / len) * 7,
+      y: muzzleY + (dy / len) * 7,
+      r: 4, maxLife: 5, life: 5,
+      color: '#ffe066',
+    });
+    addShake(0.85);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1135,25 +1421,47 @@
 
   // Rockets — straight-flying projectiles that explode on terrain contact
   const rockets = [];
+  let guidedRocket = null; // most recently fired rocket: the only one steerable
   function fireRocket() {
     const mx0 = player.x;
     const my0 = player.y - player.h / 2;
     const dx = mouseX - mx0, dy = mouseY - my0;
     const len = Math.hypot(dx, dy) || 1;
     const speed = 3.0;
-    rockets.push({
+    const r = {
       x: mx0 + (dx / len) * 7,
       y: my0 + (dy / len) * 7,
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
       life: 200,
-    });
+    };
+    rockets.push(r);
+    guidedRocket = r;
     player.facing = dx >= 0 ? 1 : -1;
     addShake(0.3);
   }
   function updateRockets() {
     for (let i = rockets.length - 1; i >= 0; i--) {
       const r = rockets[i];
+      // Only the most recently fired rocket (the "guided missile") responds
+      // to cursor input, and only its X-axis direction is steered. Speed is
+      // preserved by renormalising to the original magnitude each tick.
+      if (r === guidedRocket && slowmoActive()) {
+        const sp = Math.hypot(r.vx, r.vy) || 1;
+        const targetVx = (mouseX >= r.x ? 1 : -1) * sp;
+        r.vx = r.vx * 0.92 + targetVx * 0.08;
+        const newSp = Math.hypot(r.vx, r.vy) || 1;
+        const scale = sp / newSp;
+        r.vx *= scale; r.vy *= scale;
+        // Intercept enemy laser bolts in the rocket's path.
+        for (let j = lasers.length - 1; j >= 0; j--) {
+          const L = lasers[j];
+          if (Math.abs(L.x - r.x) < 4 && Math.abs(L.y - r.y) < 4) {
+            flashes.push({ x: L.x, y: L.y, r: 3, maxLife: 8, life: 8, color: '#ffd0d0' });
+            lasers.splice(j, 1);
+          }
+        }
+      }
       const steps = Math.max(1, Math.ceil(Math.max(Math.abs(r.vx), Math.abs(r.vy))));
       let hit = false;
       for (let s = 0; s < steps; s++) {
@@ -1161,13 +1469,13 @@
         r.y += r.vy / steps;
         const gx = Math.floor(r.x), gy = Math.floor(r.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
-        { const u = ufoAt(r.x, r.y); if (u) { damageUfo(u, 4); hit = true; break; } }
+        { const u = ufoAt(r.x, r.y); if (u) { damageUfo(u, Math.ceil(u.maxHp / 2)); hit = true; break; } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
       }
       r.life--;
       if (hit || r.life <= 0) {
-        // 30% smaller crater than grenade (22 → ~15). Self-damage if close.
         explode(r.x, r.y, 15, 45, 55, 0.85);
+        if (r === guidedRocket) guidedRocket = null;
         rockets.splice(i, 1);
       }
     }
@@ -1246,7 +1554,12 @@
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
         { const u = ufoAt(b.x, b.y); if (u) { damageUfo(u, 1); hit = true; break; } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
-          carveCircle(gx, gy, 6, true);
+          if (b.kind === 'build') {
+            fillCircle(gx, gy, 4);
+            flashes.push({ x: gx, y: gy, r: 3, maxLife: 6, life: 6, color: '#caa070' });
+          } else {
+            carveCircle(gx, gy, 6, true);
+          }
           hit = true;
           break;
         }
@@ -1257,11 +1570,7 @@
   }
 
   // HUD weapon label
-  const weapEl = document.getElementById('weap');
-  function updateWeaponHud() {
-    weapEl.textContent = 'Weapon: ' + WEAPONS[weapon].name;
-  }
-  updateWeaponHud();
+  function updateWeaponHud() { /* weapon name now shows via in-canvas flash only */ }
 
   // Wind / clouds / trees ---------------------------------------------------
   let windT = 0;
@@ -1328,9 +1637,42 @@
   function updateTrees() {
     for (let i = trees.length - 1; i >= 0; i--) {
       const t = trees[i];
+
+      // Canopy physics — once detached, the green head falls and settles on
+      // terrain. Tracked separately from trunk fade so the trunk can vanish
+      // while the canopy is still mid-air.
+      if (t.canopyDetached) {
+        if (!t.canopyLanded) {
+          t.canopyVy += 0.18;
+          if (t.canopyVy > 5) t.canopyVy = 5;
+          // Find the highest terrain top across the canopy's footprint.
+          let groundTop = H;
+          for (let x = Math.floor(t.canopyX - t.cw); x <= Math.floor(t.canopyX + t.cw); x++) {
+            if (x < 0 || x >= W) continue;
+            const gt = groundTopAt(x);
+            if (gt >= 0 && gt < groundTop) groundTop = gt;
+          }
+          const nextY = t.canopyY + t.canopyVy;
+          if (nextY + t.ch >= groundTop) {
+            t.canopyY = groundTop - t.ch;
+            t.canopyLanded = true;
+            t.canopyVy = 0;
+          } else {
+            t.canopyY = nextY;
+            t.canopyX += t.canopyVx;
+          }
+          if (t.canopyY > H + 20) t.canopyLanded = true; // off-screen, just start fading
+        } else {
+          t.canopyFadeT = (t.canopyFadeT || 0) + 1;
+        }
+      }
+
       if (t.fallen) {
         t.fadeT = (t.fadeT || 0) + 1;
-        if (t.fadeT > 90) trees.splice(i, 1);
+        // Only remove the tree once both trunk and canopy are done fading.
+        const trunkGone  = t.fadeT > 90;
+        const canopyGone = !t.canopyDetached || t.canopyFadeT > 90;
+        if (trunkGone && canopyGone) trees.splice(i, 1);
         continue;
       }
 
@@ -1338,46 +1680,39 @@
       // pull the tree down with gravity until it rests on the new surface.
       const top = groundTopAt(t.x);
       if (top < 0) {
-        // No ground in this column at all — free fall.
         t.vy += 0.18;
         if (t.vy > 5) t.vy = 5;
         t.rootY += t.vy;
         if (t.rootY > H + 20) { trees.splice(i, 1); continue; }
       } else if (top > t.rootY) {
-        // Ground has receded below the trunk base — fall to catch up.
         t.vy += 0.18;
         if (t.vy > 5) t.vy = 5;
         t.rootY = Math.min(top, t.rootY + t.vy);
         if (t.rootY === top) t.vy = 0;
       } else {
-        // top <= rootY: ground is at or above the trunk base — settled.
         t.vy = 0;
-        t.rootY = top; // ride small surface bumps
+        t.rootY = top;
       }
 
-      if (!t.falling) {
-        // Lateral support check — sample ground a few pixels either side of
-        // the trunk. If one side is much lower (or gone) we've got an
-        // overhang and the tree should topple toward that void.
-        const leftTop  = groundTopAt(t.x - 3);
-        const rightTop = groundTopAt(t.x + 3);
-        const leftBad  = leftTop  < 0 || leftTop  > t.rootY + 4;
-        const rightBad = rightTop < 0 || rightTop > t.rootY + 4;
-        if (leftBad || rightBad) {
-          t.falling = true;
-          if (leftBad && !rightBad) t.dir = -1;
-          else if (rightBad && !leftBad) t.dir = 1;
-          else t.dir = windNow() >= 0 ? 1 : -1;
-          t.angVel = 0.005 * t.dir;
-        }
-      } else {
-        t.angVel += 0.012 * t.dir;
-        t.angle += t.angVel;
-        if (Math.abs(t.angle) >= Math.PI / 2) {
-          t.angle = (Math.PI / 2) * t.dir;
-          t.falling = false;
-          t.fallen = true;
-        }
+      // Lateral support check — same trigger as before, but instead of
+      // toppling we detach the canopy and start fading the stump.
+      const leftTop  = groundTopAt(t.x - 3);
+      const rightTop = groundTopAt(t.x + 3);
+      const leftBad  = leftTop  < 0 || leftTop  > t.rootY + 4;
+      const rightBad = rightTop < 0 || rightTop > t.rootY + 4;
+      if (leftBad || rightBad) {
+        let dir;
+        if (leftBad && !rightBad) dir = -1;
+        else if (rightBad && !leftBad) dir = 1;
+        else dir = windNow() >= 0 ? 1 : -1;
+        t.fallen = true;
+        t.canopyDetached = true;
+        t.canopyX = t.x;
+        t.canopyY = t.rootY - t.h - t.ch + 1; // where it was perched
+        t.canopyVy = -0.5;                     // tiny upward kick on release
+        t.canopyVx = dir * 0.3;
+        t.canopyLanded = false;
+        t.canopyFadeT = 0;
       }
     }
   }
@@ -1392,40 +1727,51 @@
   }
   function renderTrees(w) {
     for (const t of trees) {
-      // rootY is kept up-to-date in updateTrees (follows the surface with
-      // gravity), so we can just render at the current rootY in every state.
       const baseY = t.rootY;
-      const sway = (t.falling || t.fallen)
+      const sway = t.fallen
         ? 0
         : Math.round(w * 2.2 * Math.sin(windT * 0.04 + t.sway));
 
+      // --- Trunk (stump) ---
       ctx.save();
       ctx.translate(t.x, baseY);
-      if (t.angle !== 0) ctx.rotate(t.angle);
       if (t.fallen) ctx.globalAlpha = Math.max(0, 1 - (t.fadeT || 0) / 90);
-
-      // Trunk grows upward from the pivot.
       ctx.fillStyle = '#5a3a18';
       for (let i = 0; i < t.h; i++) {
-        const dx = (t.falling || t.fallen) ? 0 : Math.round((i / t.h) * sway);
+        const dx = t.fallen ? 0 : Math.round((i / t.h) * sway);
         ctx.fillRect(dx,     -i - 1, 1, 1);
         ctx.fillRect(dx + 1, -i - 1, 1, 1);
       }
-      // Canopy centred above the trunk.
-      const cy = -t.h - t.ch + 1;
-      const cx = (t.falling || t.fallen) ? 0 : sway;
+      ctx.restore();
+
+      // --- Canopy ---
+      // While the tree is alive the canopy sits at the top of the trunk and
+      // sways with the wind. Once the canopy is detached it has its own
+      // position (canopyX/canopyY) and fades after landing.
+      let canopyAlpha = 1;
+      let cwx = t.x + sway;
+      let cwy = baseY - t.h - t.ch + 1;
+      if (t.canopyDetached) {
+        cwx = t.canopyX;
+        cwy = t.canopyY;
+        // Don't fade in mid-air — only after it has come to rest.
+        if (t.canopyLanded) {
+          canopyAlpha = Math.max(0, 1 - (t.canopyFadeT || 0) / 90);
+        }
+      }
+      if (canopyAlpha <= 0) continue;
+      ctx.globalAlpha = canopyAlpha;
       ctx.fillStyle = '#2c8a3a';
       for (let y = -t.ch; y <= t.ch; y++) {
         for (let x = -t.cw; x <= t.cw; x++) {
-          const d = (x*x) / (t.cw*t.cw) + (y*y) / (t.ch*t.ch);
-          if (d <= 1) ctx.fillRect(cx + x, cy + y, 1, 1);
+          const d = (x * x) / (t.cw * t.cw) + (y * y) / (t.ch * t.ch);
+          if (d <= 1) ctx.fillRect(Math.floor(cwx) + x, Math.floor(cwy) + y, 1, 1);
         }
       }
       ctx.fillStyle = '#4cb050';
-      ctx.fillRect(cx - 1, cy - t.ch + 1, 1, 1);
-      ctx.fillRect(cx + 1, cy - t.ch + 2, 1, 1);
-
-      ctx.restore();
+      ctx.fillRect(Math.floor(cwx) - 1, Math.floor(cwy) - t.ch + 1, 1, 1);
+      ctx.fillRect(Math.floor(cwx) + 1, Math.floor(cwy) - t.ch + 2, 1, 1);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -1435,14 +1781,15 @@
   // occasional random drop so the player has a chance to top up.
   const HEAL_AMOUNT = 35;
   const packs = [];
-  function spawnPack(x) {
+  function spawnPack(x, kind) {
     packs.push({
       x: Math.max(8, Math.min(W - 8, x | 0)),
       y: -6,
       vy: 0,
       bob: Math.random() * 6.28,
-      idle: 0,                 // ticks since landing (used for parachute fade + idle bob)
+      idle: 0,
       landed: false,
+      kind: kind || 'health',  // 'health' | 'weapon-dualmg'
     });
   }
   function packSolidAt(gx, gy) {
@@ -1482,16 +1829,35 @@
         const dx = Math.abs(p.x - player.x);
         const dy = Math.abs(p.y - (player.y - player.h / 2));
         if (dx < 4 && dy < player.h / 2 + 2) {
-          player.hp = Math.min(MAX_HP, player.hp + HEAL_AMOUNT);
-          // Sparkle: a small green burst at the player
-          for (let k = 0; k < 10; k++) {
-            const ang = Math.random() * Math.PI * 2;
-            flashes.push({
-              x: player.x + Math.cos(ang) * 3,
-              y: player.y - player.h / 2 + Math.sin(ang) * 3,
-              r: 1.5, maxLife: 14, life: 14,
-              color: '#9aff90',
-            });
+          if (p.kind === 'weapon-dualmg' || p.kind === 'weapon-builder' || p.kind === 'weapon-laser') {
+            const newWeapon = p.kind === 'weapon-builder' ? 'builder'
+                            : p.kind === 'weapon-laser'   ? 'laser'
+                                                          : 'dualmg';
+            const sparkColor = p.kind === 'weapon-builder' ? '#caa070'
+                             : p.kind === 'weapon-laser'   ? '#ff2030'
+                                                           : '#ffdc40';
+            unlockedWeapons.add(newWeapon);
+            switchWeapon(newWeapon);
+            for (let k = 0; k < 12; k++) {
+              const ang = Math.random() * Math.PI * 2;
+              flashes.push({
+                x: player.x + Math.cos(ang) * 3,
+                y: player.y - player.h / 2 + Math.sin(ang) * 3,
+                r: 1.5, maxLife: 16, life: 16,
+                color: sparkColor,
+              });
+            }
+          } else {
+            player.hp = Math.min(MAX_HP, player.hp + HEAL_AMOUNT);
+            for (let k = 0; k < 10; k++) {
+              const ang = Math.random() * Math.PI * 2;
+              flashes.push({
+                x: player.x + Math.cos(ang) * 3,
+                y: player.y - player.h / 2 + Math.sin(ang) * 3,
+                r: 1.5, maxLife: 14, life: 14,
+                color: '#9aff90',
+              });
+            }
           }
           packs.splice(i, 1);
           continue;
@@ -1500,9 +1866,28 @@
       if (p.y > H + 20) packs.splice(i, 1);
     }
   }
+  const WEAPON_PACK_LABEL = {
+    'weapon-dualmg':  'DUAL MG',
+    'weapon-builder': 'BUILDER',
+    'weapon-laser':   'LASER',
+  };
   function renderPacks() {
     for (const p of packs) {
       const x = Math.floor(p.x), y = Math.floor(p.y + (p.landed ? Math.sin(p.bob) * 0.5 : 0));
+      // Weapon crates get a floating name label above them so the player
+      // knows what they're picking up.
+      const label = WEAPON_PACK_LABEL[p.kind];
+      if (label) {
+        ctx.font = '6px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = '#000';
+        ctx.fillText(label, x + 1, y - 4);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(label, x, y - 5);
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
+      }
       // Parachute (only while falling)
       if (!p.landed) {
         ctx.fillStyle = '#e0e0e0';
@@ -1513,14 +1898,40 @@
         ctx.fillRect(x - 3, y - 4, 1, 2);
         ctx.fillRect(x + 3, y - 4, 1, 2);
       }
-      // Crate body — white with red cross
+      // Crate body — health: white w/ red cross; weapon: yellow w/ dark icon
       ctx.fillStyle = '#000';
       ctx.fillRect(x - 3, y - 2, 7, 5);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(x - 2, y - 1, 5, 3);
-      ctx.fillStyle = '#d02828';
-      ctx.fillRect(x, y - 1, 1, 3);   // vertical bar
-      ctx.fillRect(x - 1, y, 3, 1);   // horizontal bar
+      if (p.kind === 'weapon-dualmg') {
+        ctx.fillStyle = '#ffd820';
+        ctx.fillRect(x - 2, y - 1, 5, 3);
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(x - 1, y - 1, 1, 1);
+        ctx.fillRect(x + 1, y - 1, 1, 1);
+        ctx.fillRect(x - 1, y + 1, 3, 1);
+      } else if (p.kind === 'weapon-laser') {
+        // Dark crate with glowing red lens
+        ctx.fillStyle = '#1a1a22';
+        ctx.fillRect(x - 2, y - 1, 5, 3);
+        ctx.fillStyle = '#ff2030';
+        ctx.fillRect(x, y, 1, 1);
+        ctx.fillStyle = '#5a0010';
+        ctx.fillRect(x - 1, y, 1, 1);
+        ctx.fillRect(x + 1, y, 1, 1);
+      } else if (p.kind === 'weapon-builder') {
+        // Tan crate with a small brick pattern
+        ctx.fillStyle = '#caa070';
+        ctx.fillRect(x - 2, y - 1, 5, 3);
+        ctx.fillStyle = '#7a4818';
+        ctx.fillRect(x - 2, y - 1, 5, 1);
+        ctx.fillRect(x - 1, y + 1, 1, 1);
+        ctx.fillRect(x + 1, y + 1, 1, 1);
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x - 2, y - 1, 5, 3);
+        ctx.fillStyle = '#d02828';
+        ctx.fillRect(x, y - 1, 1, 3);   // vertical bar
+        ctx.fillRect(x - 1, y, 3, 1);   // horizontal bar
+      }
     }
   }
 
@@ -1538,11 +1949,25 @@
   let interWaveDelay = 0; // ticks until next wave spawns after the current is cleared
 
   function spawnWave(count, hpMult) {
+    // Distribute base altitudes (and entry X positions) into evenly-spaced
+    // slots with light jitter, so saucers settle at different heights and
+    // their bobbing rarely lines them up on the same Y.
+    const yMin = 14, yMax = 96;
+    const ySlot = (yMax - yMin) / count;
+    const yJitter = ySlot * 0.15;
+    const xSlot = (W - 40) / count;
+    const xOrder = Array.from({ length: count }, (_, i) => i);
+    for (let i = xOrder.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      [xOrder[i], xOrder[j]] = [xOrder[j], xOrder[i]];
+    }
     for (let i = 0; i < count; i++) {
       const maxHp = UFO_BASE_HP * hpMult;
-      const baseY = 22 + Math.random() * 18;
+      const baseY = yMin + i * ySlot + (Math.random() * 2 - 1) * yJitter;
+      const slot = xOrder[i];
+      const x = 20 + slot * xSlot + Math.random() * xSlot;
       ufos.push({
-        x: 20 + Math.random() * (W - 40),
+        x,
         // Start off the top of the screen and fly down to baseY.
         y: -10 - i * 8 - Math.random() * 6,
         vx: (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.2),
@@ -1573,6 +1998,22 @@
       u.hp = 0;
       u.state = 'falling';
       u.vy = 0.5 + Math.random() * 0.5;
+      killCount++;
+      // First kill of the run drops a DUAL MG weapon crate.
+      if (!firstKillDropUsed) {
+        firstKillDropUsed = true;
+        spawnPack(u.x + (Math.random() - 0.5) * 20, 'weapon-dualmg');
+      }
+      // Fourth kill drops the terrain-builder weapon.
+      if (!fourthKillDropUsed && killCount >= 4) {
+        fourthKillDropUsed = true;
+        spawnPack(u.x + (Math.random() - 0.5) * 20, 'weapon-builder');
+      }
+      // Third kill drops the LASER.
+      if (!sixthKillDropUsed && killCount >= 3) {
+        sixthKillDropUsed = true;
+        spawnPack(u.x + (Math.random() - 0.5) * 20, 'weapon-laser');
+      }
     }
   }
   function ufoAt(x, y) {
@@ -1797,6 +2238,10 @@
   let gameStartMs = Date.now();
   let finalElapsedMs = null;   // frozen value at the moment the player died
   let hits = 0;                // shots landed on enemy ships
+  let firstKillDropUsed = false; // one-shot flag for the wave-1 weapon drop
+  let killCount = 0;             // total UFOs downed this run
+  let fourthKillDropUsed = false;
+  let sixthKillDropUsed = false;
   function survivedMs() {
     return finalElapsedMs !== null ? finalElapsedMs : (Date.now() - gameStartMs);
   }
@@ -1820,7 +2265,11 @@
   let tickAccum = 0;
   function loop() {
     updateSlowmoEnergy();
-    tickAccum += slowmoActive() ? SLOWMO_SCALE : TIME_SCALE;
+    if (paused) {
+      tickAccum = 0;
+    } else {
+      tickAccum += slowmoActive() ? SLOWMO_SCALE : TIME_SCALE;
+    }
     while (tickAccum >= 1) {
       tickAccum -= 1;
       const wpn = WEAPONS[weapon];
@@ -1840,6 +2289,9 @@
       updateGrenades();
       updateUfos();
       updateLasers();
+      for (let i = playerBeams.length - 1; i >= 0; i--) {
+        if (--playerBeams[i].life <= 0) playerBeams.splice(i, 1);
+      }
       updatePacks();
       if (weaponLabelTime > 0) weaponLabelTime--;
       if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - 0.04);
