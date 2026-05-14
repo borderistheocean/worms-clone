@@ -24,7 +24,7 @@
 <div id="wrap">
   <canvas id="c" width="480" height="270"></canvas>
 </div>
-<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • R regenerate • P pause</div>
+<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • P pause</div>
 <script>
 (() => {
   const W = 480, H = 270;
@@ -250,6 +250,19 @@
   let playerHitFlash = 0;   // 0..1, ticks down — drives the red damage overlay
   let introTimer = 240;     // ticks remaining for the "TRY 'N' SURVIVE" intro
   let paused = false;
+  // Wave banner — shown briefly when each wave starts.
+  let waveBannerText = '';
+  let waveBannerTime = 0;
+  // Hit-stop — render-frame counter that freezes the world for a moment when
+  // the player lands a kill, for impact feedback.
+  let hitStopFrames = 0;
+  // Dash state — tracks last keydown timestamps per direction for double-tap
+  // detection and a cooldown frame counter.
+  let lastTapLeft = 0, lastTapRight = 0;
+  const DASH_WINDOW_MS = 250;
+  const DASH_COOLDOWN = 90;     // ticks before dash is available again
+  const DASH_IMPULSE = 4.0;
+  let dashCooldown = 0;
   const player = {
     x: W / 2, y: 20,
     w: 6, h: 10,
@@ -936,6 +949,22 @@
 
     // Intro title — big bold "TRY 'N' SURVIVE" that fades out over the last
     // ~1s of the intro timer.
+    // Wave banner — large title that fades over the last ~0.5s of its life.
+    if (waveBannerTime > 0 && introTimer <= 0) {
+      const alpha = Math.min(1, waveBannerTime / 30);
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText(waveBannerText, W / 2 + 2, H / 2 + 2);
+      ctx.fillStyle = '#80e0ff';
+      ctx.fillText(waveBannerText, W / 2, H / 2);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
+
     if (introTimer > 0) {
       const alpha = Math.min(1, introTimer / 60);
       ctx.globalAlpha = alpha;
@@ -1081,6 +1110,25 @@
     if (!wasDown && k === 'p') { paused = !paused; keys[k] = true; return; }
     if (paused) { if (e.key === ' ') e.preventDefault(); return; }
     if (!wasDown && !player.dead && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = JUMP_BUFFER;
+    // Double-tap A/D (or arrows) for a quick dash. Records the moment each
+    // direction key was pressed; a second press inside DASH_WINDOW_MS while
+    // dash is off cooldown applies an impulse.
+    if (!wasDown && !player.dead && dashCooldown === 0) {
+      const now = Date.now();
+      if (k === 'a' || k === 'arrowleft') {
+        if (now - lastTapLeft < DASH_WINDOW_MS) {
+          player.vx = -DASH_IMPULSE;
+          dashCooldown = DASH_COOLDOWN;
+        }
+        lastTapLeft = now;
+      } else if (k === 'd' || k === 'arrowright') {
+        if (now - lastTapRight < DASH_WINDOW_MS) {
+          player.vx = DASH_IMPULSE;
+          dashCooldown = DASH_COOLDOWN;
+        }
+        lastTapRight = now;
+      }
+    }
     if (!wasDown && !player.dead && k === 'e' && !player.cooking) {
       player.cooking = true;
       player.cookTime = 0;
@@ -1107,6 +1155,10 @@
       slowmoEnergy = SLOWMO_MAX_MS;
       playerHitFlash = 0;
       introTimer = 240;
+      waveBannerTime = 0;
+      hitStopFrames = 0;
+      dashCooldown = 0;
+      lastTapLeft = lastTapRight = 0;
       firstKillDropUsed = false;
       fourthKillDropUsed = false;
       sixthKillDropUsed = false;
@@ -1958,6 +2010,8 @@
   let interWaveDelay = 0; // ticks until next wave spawns after the current is cleared
 
   function spawnWave(count, hpMult) {
+    waveBannerText = 'WAVE ' + (waveIndex + 1);
+    waveBannerTime = 120;
     // Distribute base altitudes (and entry X positions) into evenly-spaced
     // slots with light jitter, so saucers settle at different heights and
     // their bobbing rarely lines them up on the same Y.
@@ -2008,6 +2062,7 @@
       u.state = 'falling';
       u.vy = 0.5 + Math.random() * 0.5;
       killCount++;
+      hitStopFrames = Math.max(hitStopFrames, 2);
       // First kill of the run drops a DUAL MG weapon crate.
       if (!firstKillDropUsed) {
         firstKillDropUsed = true;
@@ -2280,6 +2335,10 @@
     updateSlowmoEnergy();
     if (paused) {
       tickAccum = 0;
+    } else if (hitStopFrames > 0) {
+      // Freeze the world for a couple of render frames for "hit-stop" punch.
+      hitStopFrames--;
+      tickAccum = 0;
     } else {
       tickAccum += slowmoActive() ? SLOWMO_SCALE : TIME_SCALE;
     }
@@ -2309,6 +2368,8 @@
       if (weaponLabelTime > 0) weaponLabelTime--;
       if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - 0.04);
       if (introTimer > 0) introTimer--;
+      if (waveBannerTime > 0) waveBannerTime--;
+      if (dashCooldown > 0) dashCooldown--;
       // Rare random aid drop — roughly once every ~25s on average.
       if (!player.dead && Math.random() < 0.0007 && packs.length < 4) {
         spawnPack(20 + Math.random() * (W - 40));
