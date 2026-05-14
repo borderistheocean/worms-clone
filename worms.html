@@ -206,7 +206,7 @@
       for (let y = Math.max(0, startY); y < H; y++) {
         if (grid[idx(gx, y)] === 1) { groundTop = y; break; }
       }
-      const stampCount = chunk.heavy ? Math.max(1, Math.floor(data.count / 2)) : data.count;
+      const stampCount = chunk.heavy ? Math.max(1, Math.floor(data.count * 0.25)) : data.count;
       for (let i = 1; i <= stampCount; i++) {
         const ny = groundTop - i;
         if (ny >= 0 && ny < H) grid[idx(gx, ny)] = 1;
