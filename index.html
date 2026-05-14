@@ -4,13 +4,18 @@
 <meta charset="utf-8">
 <title>Worms PoC</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; overflow: hidden;
+  html, body { margin: 0; height: 100%; width: 100%; background: #111; overflow: hidden;
     font-family: monospace; color: #ddd; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  #wrap { position: relative; }
+  /* Canvas keeps its 480x270 internal resolution but scales to fill the
+     viewport while preserving the 16:9 aspect ratio (letterboxed if the
+     window aspect is off). #wrap sizes to match so the HUD overlays it. */
+  #wrap { position: relative;
+    width:  min(92vw, calc(92vh * 16 / 9));
+    height: min(92vh, calc(92vw * 9 / 16)); }
   canvas { image-rendering: pixelated; image-rendering: crisp-edges;
-    width: 960px; height: 540px; background: #87ceeb; display: block;
-    box-shadow: 0 0 20px #000; cursor: crosshair; }
+    width: 100%; height: 100%; background: #87ceeb; display: block;
+    box-shadow: 0 0 20px #000; cursor: none; }
   #hud { position: absolute; top: 8px; left: 12px; font-size: 12px;
     text-shadow: 1px 1px 0 #000; pointer-events: none; }
 </style>
@@ -242,6 +247,8 @@
 
   // Player
   const MAX_HP = 100;
+  let playerHitFlash = 0;   // 0..1, ticks down — drives the red damage overlay
+  let introTimer = 240;     // ticks remaining for the "TRY 'N' SURVIVE" intro
   const player = {
     x: W / 2, y: 20,
     w: 6, h: 10,
@@ -255,7 +262,10 @@
     jumpCharge: 0,
     breathT: 0,
     ducking: false,
+    cooking: false,
+    cookTime: 0,
   };
+  const GRENADE_FUSE = 120; // 2 seconds @ 60fps
   const STAND_H = 10;
   const DUCK_H  = 6;
   const JUMP_CHARGE_FRAMES = 6;
@@ -371,6 +381,18 @@
       }
     }
 
+    // Grenade cook — counts up while G is held. If the fuse runs out before
+    // the player releases the key, the grenade detonates in-hand instead.
+    if (player.cooking) {
+      player.cookTime++;
+      if (player.cookTime >= GRENADE_FUSE) {
+        // Drop a grenade at the player with fuse 0 so it explodes immediately.
+        throwGrenade(0.2, 1);
+        player.cooking = false;
+        player.cookTime = 0;
+      }
+    }
+
     // Jump — small sit-up crouch before launching
     if (jumpQueued > 0 && player.onGround && !player.ducking && player.jumpCharge === 0) {
       player.jumpCharge = JUMP_CHARGE_FRAMES;
@@ -434,7 +456,12 @@
     const s = shakeTrauma * shakeTrauma;
     const shakeX = (Math.random() * 2 - 1) * SHAKE_MAX * s;
     const shakeY = (Math.random() * 2 - 1) * SHAKE_MAX * s;
-    ctx.setTransform(1, 0, 0, 1, shakeX, shakeY);
+    // Slight zoom while shaking so the offset doesn't reveal canvas edges
+    // (which look like a thin strip of sky/dark beyond the scene).
+    const scale = 1 + 0.05 * s;
+    ctx.setTransform(scale, 0, 0, scale,
+      shakeX - (scale - 1) * (W / 2),
+      shakeY - (scale - 1) * (H / 2));
 
     // Sky — during slow-mo we fade with low alpha so the previous frame's
     // moving pixels (bullets, blood, rockets) leave motion-blur trails.
@@ -631,7 +658,65 @@
         drawLeg(legRightX, legY);
       }
     }
-    if (!player.dead) {
+    // Grenade cook — a little arm holds the grenade up over the shoulder.
+    // The hand pose stays held while G is down; on release the grenade flies
+    // off so we don't animate a forward flick here.
+    if (!player.dead && player.cooking) {
+      const t = Math.min(1, player.cookTime / 18); // ease-in over the first ~0.3s
+      const back = -player.facing;
+      const handX = player.x + back * (0.5 + t * 1.5);
+      const handY = (player.y - player.h) - 1 - t * 2;
+      // Shoulder anchor (top of body)
+      const shX = player.x + back * 0.5;
+      const shY = player.y - player.h + 4;
+      // Short arm
+      ctx.strokeStyle = '#cc3030';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(shX + 0.5, shY + 0.5);
+      ctx.lineTo(handX + 0.5, handY + 1.5);
+      ctx.stroke();
+      // Hand
+      ctx.fillStyle = '#ffd9b3';
+      ctx.fillRect(Math.floor(handX), Math.floor(handY) + 1, 1, 1);
+      // Grenade in the hand
+      ctx.fillStyle = '#222';
+      ctx.fillRect(Math.floor(handX), Math.floor(handY) - 1, 2, 2);
+      // Fuse spark — flickers faster as the fuse runs down
+      const flickRate = player.cookTime > GRENADE_FUSE - 30 ? 2 : 6;
+      if (((windT / flickRate) | 0) & 1) {
+        ctx.fillStyle = '#ffe060';
+        ctx.fillRect(Math.floor(handX) + (back > 0 ? -1 : 2), Math.floor(handY) - 1, 1, 1);
+      }
+      // Countdown number above the held grenade
+      const remain = Math.max(0, (GRENADE_FUSE - player.cookTime) / 60);
+      ctx.font = '5px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#000';
+      ctx.fillText(remain.toFixed(1), Math.floor(handX) + 1, Math.floor(handY) - 2);
+      ctx.fillStyle = remain < 0.6 ? '#ff5050' : '#ffffff';
+      ctx.fillText(remain.toFixed(1), Math.floor(handX), Math.floor(handY) - 3);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // Countdown over every in-flight grenade
+    ctx.font = '5px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    for (const g of grenades) {
+      const remain = Math.max(0, g.fuse / 60);
+      const tx = Math.floor(g.x), ty = Math.floor(g.y) - 3;
+      ctx.fillStyle = '#000';
+      ctx.fillText(remain.toFixed(1), tx + 1, ty + 1);
+      ctx.fillStyle = remain < 0.6 ? '#ff5050' : '#ffffff';
+      ctx.fillText(remain.toFixed(1), tx, ty);
+    }
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+
+    if (!player.dead && !player.cooking) {
     // Weapon — rotated to aim, shape per weapon
     const gx0 = player.x;
     const gy0 = player.y - player.h / 2;
@@ -692,17 +777,81 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Bullet-time meter (top-left). Border + fill that shrinks as you use it.
+    // Bullet-time meter — bottom-centre. Only visible when charging or when
+    // slow-mo is on; fades away when fully charged and idle.
     {
-      const mW = 60, mH = 4;
-      const mx = 6, my = 6;
-      ctx.fillStyle = '#000';
-      ctx.fillRect(mx - 1, my - 1, mW + 2, mH + 2);
+      const mW = 80, mH = 4;
+      const mx = Math.floor((W - mW) / 2);
+      const my = H - 10;
       const frac = slowmoEnergy / SLOWMO_MAX_MS;
-      ctx.fillStyle = slowmoActive() ? '#60c0ff'
-                     : frac < 0.2     ? '#a04040'
-                                       : '#3070a0';
-      ctx.fillRect(mx, my, Math.round(mW * frac), mH);
+      const needed = slowmoActive() || frac < 0.999;
+      if (needed) slowmoBarAlpha = 1;
+      else        slowmoBarAlpha = Math.max(0, slowmoBarAlpha - 0.04);
+      if (slowmoBarAlpha > 0.01) {
+        ctx.globalAlpha = slowmoBarAlpha;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(mx - 1, my - 1, mW + 2, mH + 2);
+        ctx.fillStyle = slowmoActive() ? '#60c0ff'
+                       : frac < 0.2     ? '#a04040'
+                                         : '#3070a0';
+        ctx.fillRect(mx, my, Math.round(mW * frac), mH);
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = '#000';
+        ctx.fillText('SLO MO', W / 2 + 1, my);
+        ctx.fillStyle = '#cfe8ff';
+        ctx.fillText('SLO MO', W / 2, my - 1);
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Weapon-name flash near the bottom — appears for ~1.5s on switch and
+    // fades out over the last ~0.3s of that.
+    if (weaponLabelTime > 0) {
+      const alpha = Math.min(1, weaponLabelTime / 20);
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.font = 'bold 14px monospace';
+      const label = WEAPONS[weapon].name;
+      ctx.fillStyle = '#000';
+      ctx.fillText(label, W / 2 + 1, H - 11);
+      ctx.fillStyle = '#ffe060';
+      ctx.fillText(label, W / 2, H - 12);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // Red damage flash — vignette-style overlay that fades fast.
+    if (playerHitFlash > 0.01) {
+      ctx.globalAlpha = Math.min(0.6, playerHitFlash);
+      const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.15, W / 2, H / 2, H * 0.8);
+      vg.addColorStop(0, 'rgba(180,0,0,0.0)');
+      vg.addColorStop(1, 'rgba(180,0,0,1.0)');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
+
+    // Intro title — big bold "TRY 'N' SURVIVE" that fades out over the last
+    // ~1s of the intro timer.
+    if (introTimer > 0) {
+      const alpha = Math.min(1, introTimer / 60);
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 26px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText("TRY 'N' SURVIVE", W / 2 + 2, H / 2 - 18);
+      ctx.fillStyle = '#ffe060';
+      ctx.fillText("TRY 'N' SURVIVE", W / 2, H / 2 - 20);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
     }
 
     // Game-over overlay
@@ -759,7 +908,20 @@
     mg:      { name: 'MG',      fire: fireBullet, interval: 5,  auto: true  },
     bazooka: { name: 'BAZOOKA', fire: fireRocket, interval: 55, auto: false },
   };
+  const WEAPON_ORDER = ['pistol', 'mg', 'bazooka'];
   let weapon = 'mg';
+  let weaponLabelTime = 0; // ticks remaining for the on-screen weapon name
+  function switchWeapon(name) {
+    if (!WEAPONS[name] || weapon === name) return;
+    weapon = name;
+    weaponLabelTime = 90; // ~1.5s visible before fading
+    updateWeaponHud();
+  }
+  function cycleWeapon(dir) {
+    const i = WEAPON_ORDER.indexOf(weapon);
+    const next = WEAPON_ORDER[(i + dir + WEAPON_ORDER.length) % WEAPON_ORDER.length];
+    switchWeapon(next);
+  }
 
   // Input
   const keys = Object.create(null);
@@ -772,10 +934,13 @@
     const k = e.key.toLowerCase();
     const wasDown = keys[k];
     if (!wasDown && !player.dead && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = JUMP_BUFFER;
-    if (!wasDown && !player.dead && k === 'g') throwGrenade();
-    if (!wasDown && k === '1') { weapon = 'pistol';  updateWeaponHud(); }
-    if (!wasDown && k === '2') { weapon = 'mg';      updateWeaponHud(); }
-    if (!wasDown && k === '3') { weapon = 'bazooka'; updateWeaponHud(); }
+    if (!wasDown && !player.dead && k === 'e' && !player.cooking) {
+      player.cooking = true;
+      player.cookTime = 0;
+    }
+    if (!wasDown && k === '1') switchWeapon('pistol');
+    if (!wasDown && k === '2') switchWeapon('mg');
+    if (!wasDown && k === '3') switchWeapon('bazooka');
     keys[k] = true;
     if (k === 'r') {
       generateTerrain();
@@ -787,6 +952,8 @@
       finalElapsedMs = null;
       hits = 0;
       slowmoEnergy = SLOWMO_MAX_MS;
+      playerHitFlash = 0;
+      introTimer = 240;
       player.hp = MAX_HP;
       player.dead = false;
       player.deathTimer = 0;
@@ -794,7 +961,20 @@
     }
     if (e.key === ' ') e.preventDefault();
   });
-  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase();
+    keys[k] = false;
+    if (k === 'e' && player.cooking) releaseCook();
+  });
+  function releaseCook() {
+    if (!player.cooking) return;
+    const remaining = Math.max(1, GRENADE_FUSE - player.cookTime);
+    // Power scales with cook time so longer holds throw further.
+    const power = 1.8 + Math.min(1, player.cookTime / GRENADE_FUSE) * 3.0;
+    throwGrenade(power, remaining);
+    player.cooking = false;
+    player.cookTime = 0;
+  }
 
   let mouseX = 0, mouseY = 0;
   function setMouseFromEvent(e) {
@@ -802,7 +982,12 @@
     mouseX = Math.floor((e.clientX - rect.left) * (W / rect.width));
     mouseY = Math.floor((e.clientY - rect.top)  * (H / rect.height));
   }
-  canvas.addEventListener('mousemove', setMouseFromEvent);
+  window.addEventListener('mousemove', setMouseFromEvent);
+  window.addEventListener('wheel', e => {
+    if (player.dead) return;
+    cycleWeapon(e.deltaY > 0 ? 1 : -1);
+    e.preventDefault();
+  }, { passive: false });
   let firingHeld = false;
   let fireCooldown = 0;
   let slowmoHeld = false;
@@ -811,6 +996,7 @@
   const SLOWMO_RECHARGE_MS = 5000;
   let slowmoEnergy = SLOWMO_MAX_MS;
   let slowmoLastMs = Date.now();
+  let slowmoBarAlpha = 0;
   function slowmoActive() {
     return slowmoHeld && slowmoEnergy > 0 && !player.dead;
   }
@@ -824,7 +1010,7 @@
       slowmoEnergy = Math.min(SLOWMO_MAX_MS, slowmoEnergy + dt * (SLOWMO_MAX_MS / SLOWMO_RECHARGE_MS));
     }
   }
-  canvas.addEventListener('mousedown', e => {
+  window.addEventListener('mousedown', e => {
     setMouseFromEvent(e);
     if (e.button === 2) {
       slowmoHeld = true;
@@ -838,7 +1024,7 @@
     if (e.button === 2) slowmoHeld = false;
     else firingHeld = false;
   });
-  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  window.addEventListener('contextmenu', e => e.preventDefault());
 
   // Bullets
   const bullets = [];
@@ -925,6 +1111,7 @@
       const intensity = 1 - dist / blastR;
       const dmg = Math.round(maxDmg * intensity * intensity + 5 * intensity);
       player.hp = Math.max(0, player.hp - dmg);
+      playerHitFlash = Math.min(1, playerHitFlash + 0.4 + intensity * 0.4);
       if (player.hp === 0) { player.dead = true; player.deathTimer = 0; if (finalElapsedMs === null) finalElapsedMs = Date.now() - gameStartMs; }
       const count = 14 + Math.floor(intensity * 26);
       for (let k = 0; k < count; k++) {
@@ -984,19 +1171,18 @@
 
   // Grenades
   const grenades = [];
-  function throwGrenade() {
+  function throwGrenade(power, fuse) {
     const mx0 = player.x;
     const my0 = player.y - player.h / 2;
     const dx = mouseX - mx0;
     const dy = mouseY - my0;
     const len = Math.hypot(dx, dy) || 1;
-    const power = 3.2;
     grenades.push({
       x: mx0,
       y: my0,
       vx: (dx / len) * power,
       vy: (dy / len) * power - 0.5, // slight upward bias for an arc
-      fuse: 120, // ~2s at 60fps
+      fuse,
     });
     player.facing = dx >= 0 ? 1 : -1;
   }
@@ -1264,6 +1450,11 @@
   function updatePacks() {
     for (let i = packs.length - 1; i >= 0; i--) {
       const p = packs[i];
+      // If the terrain under a landed pack is destroyed, drop it again.
+      if (p.landed && !packSolidAt(Math.floor(p.x), Math.floor(p.y + 2))) {
+        p.landed = false;
+        p.vy = 0;
+      }
       if (!p.landed) {
         // Slowed fall (parachute) — cap vy lower than gravity normally allows.
         p.vy = Math.min(1.1, p.vy + 0.05);
@@ -1417,9 +1608,10 @@
         continue;
       }
       if (u.state === 'falling') {
-        // Spiral / plummet. No more shooting.
-        u.vy += 0.18;
-        if (u.vy > 5) u.vy = 5;
+        // Spiral / plummet. Slower than projectile gravity so it reads as a
+        // wounded crash, not a stone drop. No more shooting.
+        u.vy += 0.05;
+        if (u.vy > 1.6) u.vy = 1.6;
         u.y += u.vy;
         u.x += u.vx * 0.4; // drifts as it falls
         // Sample several columns across the saucer's belly so a wide hull
@@ -1489,6 +1681,7 @@
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           carveCircle(gx, gy, 4, true);
           flashes.push({ x: gx, y: gy, r: 4, maxLife: 6, life: 6, color: '#ff5050' });
+          addShake(0.35);
           dead = true; break;
         }
         // Hit player
@@ -1496,6 +1689,7 @@
           const pcx = player.x, pcy = player.y - player.h / 2;
           if (Math.abs(L.x - pcx) < 3 && Math.abs(L.y - pcy) < player.h / 2 + 1) {
             player.hp = Math.max(0, player.hp - 12);
+            playerHitFlash = Math.min(1, playerHitFlash + 0.6);
             if (player.hp === 0) { player.dead = true; player.deathTimer = 0; if (finalElapsedMs === null) finalElapsedMs = Date.now() - gameStartMs; }
             // Splash of blood
             for (let k = 0; k < 8; k++) {
@@ -1643,6 +1837,9 @@
       updateUfos();
       updateLasers();
       updatePacks();
+      if (weaponLabelTime > 0) weaponLabelTime--;
+      if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - 0.04);
+      if (introTimer > 0) introTimer--;
       // Rare random aid drop — roughly once every ~25s on average.
       if (!player.dead && Math.random() < 0.0007 && packs.length < 4) {
         spawnPack(20 + Math.random() * (W - 40));
