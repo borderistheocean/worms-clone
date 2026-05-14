@@ -279,9 +279,10 @@
       if (!playerCollidesAt(tryX, player.y)) {
         player.x = tryX;
       } else {
-        // Try step-up
+        // Try step-up — generous enough to smooth over jagged pixel slopes,
+        // but capped so steep walls still block (Worms-style traversal).
         let climbed = false;
-        for (let up = 1; up <= 2; up++) {
+        for (let up = 1; up <= 4; up++) {
           if (!playerCollidesAt(tryX, player.y - up)) {
             player.x = tryX;
             player.y -= up;
