@@ -18,7 +18,7 @@
 <body>
 <div id="wrap">
   <canvas id="c" width="480" height="270"></canvas>
-  <div id="hud">A/D or ←/→ move • W/Space/↑ jump • Left-click shoot • G throw grenade • Right-click crater • R regenerate</div>
+  <div id="hud">A/D or ←/→ move • W/Space/↑ jump • 1 pistol / 2 MG / 3 bazooka • Left-click shoot • Right-click crater • R regenerate<br><span id="weap"></span></div>
 </div>
 <script>
 (() => {
@@ -292,11 +292,12 @@
       }
       return;
     }
+    // Face toward cursor each frame
+    player.facing = (mouseX >= player.x) ? 1 : -1;
     // Horizontal input
     let ax = 0;
     if (keys['arrowleft'] || keys['a']) ax -= 1;
     if (keys['arrowright'] || keys['d']) ax += 1;
-    if (ax !== 0) player.facing = ax;
     player.vx = ax * 0.7;
 
     // Gravity
@@ -445,6 +446,17 @@
       ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 1, 1);
     }
 
+    // Rockets — a small dark body with a flickering yellow flame tail
+    for (const r of rockets) {
+      const sp = Math.hypot(r.vx, r.vy) || 1;
+      const tx = r.x - (r.vx / sp) * 3;
+      const ty = r.y - (r.vy / sp) * 3;
+      ctx.fillStyle = (Math.random() < 0.5) ? '#ffd040' : '#ff7020';
+      ctx.fillRect(Math.floor(tx), Math.floor(ty), 1, 1);
+      ctx.fillStyle = '#222';
+      ctx.fillRect(Math.floor(r.x), Math.floor(r.y), 2, 2);
+    }
+
     // Muzzle flashes (drawn over everything, including sky)
     for (const f of flashes) {
       if (f.explosion) continue;
@@ -491,18 +503,42 @@
       ctx.fillRect(px + (player.facing > 0 ? player.w - 2 : 1), py + 1, 1, 1);
     }
     if (!player.dead) {
-    // Gun barrel pointing at cursor
+    // Weapon — rotated to aim, shape per weapon
     const gx0 = player.x;
     const gy0 = player.y - player.h / 2;
     const adx = mouseX - gx0, ady = mouseY - gy0;
-    const alen = Math.hypot(adx, ady) || 1;
-    const gx1 = gx0 + (adx / alen) * 6;
-    const gy1 = gy0 + (ady / alen) * 6;
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(gx0, gy0); ctx.lineTo(gx1, gy1);
-    ctx.stroke();
+    const ang = Math.atan2(ady, adx);
+    ctx.save();
+    ctx.translate(gx0, gy0);
+    ctx.rotate(ang);
+    // When aiming to the left the sprite is rotated past vertical, which puts
+    // grip/mag on top. Flip the local Y so "down" of the weapon stays toward
+    // the player's feet regardless of facing.
+    if (adx < 0) ctx.scale(1, -1);
+    if (weapon === 'pistol') {
+      // Short stubby grey pistol — barrel + small grip
+      ctx.fillStyle = '#444';
+      ctx.fillRect(0, -1, 5, 2);              // barrel
+      ctx.fillStyle = '#222';
+      ctx.fillRect(1, 0, 2, 3);               // grip stub
+    } else if (weapon === 'mg') {
+      // Longer barrel, mag underneath
+      ctx.fillStyle = '#2a2a2a';
+      ctx.fillRect(0, -1, 9, 2);              // long barrel
+      ctx.fillStyle = '#555';
+      ctx.fillRect(7, -2, 2, 1);              // front sight
+      ctx.fillStyle = '#222';
+      ctx.fillRect(2, 1, 3, 3);               // magazine
+    } else if (weapon === 'bazooka') {
+      // Compact tube with muzzle ring and small handgrip
+      ctx.fillStyle = '#3a2a1a';
+      ctx.fillRect(-1, -1, 8, 3);             // tube
+      ctx.fillStyle = '#5a3a20';
+      ctx.fillRect(6, -2, 2, 4);              // muzzle ring
+      ctx.fillStyle = '#222';
+      ctx.fillRect(1, 2, 2, 2);               // grip
+    }
+    ctx.restore();
 
     // Aim reticle
     ctx.strokeStyle = 'rgba(255,255,255,0.7)';
@@ -528,6 +564,14 @@
     }
   }
 
+  // Weapons
+  const WEAPONS = {
+    pistol:  { name: 'PISTOL',  fire: fireBullet, interval: 24, auto: false },
+    mg:      { name: 'MG',      fire: fireBullet, interval: 5,  auto: true  },
+    bazooka: { name: 'BAZOOKA', fire: fireRocket, interval: 55, auto: false },
+  };
+  let weapon = 'mg';
+
   // Input
   const keys = Object.create(null);
   let jumpQueued = false;
@@ -536,6 +580,9 @@
     const wasDown = keys[k];
     if (!wasDown && !player.dead && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = true;
     if (!wasDown && !player.dead && k === 'g') throwGrenade();
+    if (!wasDown && k === '1') { weapon = 'pistol';  updateWeaponHud(); }
+    if (!wasDown && k === '2') { weapon = 'mg';      updateWeaponHud(); }
+    if (!wasDown && k === '3') { weapon = 'bazooka'; updateWeaponHud(); }
     keys[k] = true;
     if (k === 'r') {
       generateTerrain();
@@ -557,16 +604,15 @@
   canvas.addEventListener('mousemove', setMouseFromEvent);
   let firingHeld = false;
   let fireCooldown = 0;
-  const FIRE_INTERVAL = 6; // frames between auto-fires while held
   canvas.addEventListener('mousedown', e => {
     setMouseFromEvent(e);
     if (e.button === 2) {
       // Right-click: instant crater (kept for terrain experimentation)
       carveCircle(mouseX, mouseY, 14, true);
     } else if (!player.dead) {
-      fireBullet();
+      const w = WEAPONS[weapon];
+      if (fireCooldown <= 0) { w.fire(); fireCooldown = w.interval; }
       firingHeld = true;
-      fireCooldown = FIRE_INTERVAL;
     }
   });
   window.addEventListener('mouseup', e => { if (e.button !== 2) firingHeld = false; });
@@ -644,6 +690,75 @@
     }
   }
 
+  // Shared explosion: carves crater, flash, shake, damages player if in blastR, sprays blood
+  function explode(x, y, craterR, blastR, maxDmg, shake) {
+    carveCircle(x, y, craterR, true);
+    flashes.push({ x, y, r: craterR * 0.65, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
+    flashes.push({ x, y, r: craterR * 0.82, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
+    addShake(shake);
+    const pcx = player.x, pcy = player.y - player.h / 2;
+    const ddx = pcx - x, ddy = pcy - y;
+    const dist = Math.hypot(ddx, ddy);
+    if (dist < blastR && !player.dead) {
+      const intensity = 1 - dist / blastR;
+      const dmg = Math.round(maxDmg * intensity * intensity + 5 * intensity);
+      player.hp = Math.max(0, player.hp - dmg);
+      if (player.hp === 0) { player.dead = true; player.deathTimer = 0; }
+      const count = 14 + Math.floor(intensity * 26);
+      for (let k = 0; k < count; k++) {
+        const ang = Math.atan2(ddy || (Math.random() - 0.5), ddx || (Math.random() - 0.5))
+          + (Math.random() - 0.5) * 1.4;
+        const speed = 1 + Math.random() * 3 + intensity * 1.5;
+        bloods.push({
+          x: pcx + (Math.random() - 0.5) * 2,
+          y: pcy + (Math.random() - 0.5) * 4,
+          vx: Math.cos(ang) * speed,
+          vy: Math.sin(ang) * speed - Math.random() * 1.5,
+          life: 60 + (Math.random() * 40) | 0,
+        });
+      }
+    }
+  }
+
+  // Rockets — straight-flying projectiles that explode on terrain contact
+  const rockets = [];
+  function fireRocket() {
+    const mx0 = player.x;
+    const my0 = player.y - player.h / 2;
+    const dx = mouseX - mx0, dy = mouseY - my0;
+    const len = Math.hypot(dx, dy) || 1;
+    const speed = 3.0;
+    rockets.push({
+      x: mx0 + (dx / len) * 7,
+      y: my0 + (dy / len) * 7,
+      vx: (dx / len) * speed,
+      vy: (dy / len) * speed,
+      life: 200,
+    });
+    player.facing = dx >= 0 ? 1 : -1;
+    addShake(0.3);
+  }
+  function updateRockets() {
+    for (let i = rockets.length - 1; i >= 0; i--) {
+      const r = rockets[i];
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(r.vx), Math.abs(r.vy))));
+      let hit = false;
+      for (let s = 0; s < steps; s++) {
+        r.x += r.vx / steps;
+        r.y += r.vy / steps;
+        const gx = Math.floor(r.x), gy = Math.floor(r.y);
+        if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
+      }
+      r.life--;
+      if (hit || r.life <= 0) {
+        // 30% smaller crater than grenade (22 → ~15). Self-damage if close.
+        explode(r.x, r.y, 15, 45, 55, 0.85);
+        rockets.splice(i, 1);
+      }
+    }
+  }
+
   // Grenades
   const grenades = [];
   function throwGrenade() {
@@ -699,35 +814,7 @@
 
       g.fuse--;
       if (g.fuse <= 0) {
-        carveCircle(g.x, g.y, 22, true);
-        flashes.push({ x: g.x, y: g.y, r: 14, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
-        flashes.push({ x: g.x, y: g.y, r: 18, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
-        addShake(0.85);
-        // Blood: if player is within blast radius, spray pixels outward from the blast
-        const pcx = player.x, pcy = player.y - player.h / 2;
-        const ddx = pcx - g.x, ddy = pcy - g.y;
-        const dist = Math.hypot(ddx, ddy);
-        const BLAST_R = 60; // damage falloff radius
-        if (dist < BLAST_R && !player.dead) {
-          const intensity = 1 - dist / BLAST_R;
-          // Damage: up to ~70 at the centre, falling off with square of closeness
-          const dmg = Math.round(70 * intensity * intensity + 5 * intensity);
-          player.hp = Math.max(0, player.hp - dmg);
-          if (player.hp === 0) { player.dead = true; player.deathTimer = 0; }
-          const count = 14 + Math.floor(intensity * 26);
-          for (let k = 0; k < count; k++) {
-            const ang = Math.atan2(ddy || (Math.random() - 0.5), ddx || (Math.random() - 0.5))
-              + (Math.random() - 0.5) * 1.4;
-            const speed = 1 + Math.random() * 3 + intensity * 1.5;
-            bloods.push({
-              x: pcx + (Math.random() - 0.5) * 2,
-              y: pcy + (Math.random() - 0.5) * 4,
-              vx: Math.cos(ang) * speed,
-              vy: Math.sin(ang) * speed - Math.random() * 1.5,
-              life: 60 + (Math.random() * 40) | 0,
-            });
-          }
-        }
+        explode(g.x, g.y, 22, 60, 70, 0.85);
         grenades.splice(i, 1);
       }
     }
@@ -755,6 +842,13 @@
     }
   }
 
+  // HUD weapon label
+  const weapEl = document.getElementById('weap');
+  function updateWeaponHud() {
+    weapEl.textContent = 'Weapon: ' + WEAPONS[weapon].name;
+  }
+  updateWeaponHud();
+
   // Boot
   generateTerrain();
 
@@ -764,13 +858,17 @@
     tickAccum += TIME_SCALE;
     while (tickAccum >= 1) {
       tickAccum -= 1;
-      if (firingHeld) {
-        if (fireCooldown <= 0) { fireBullet(); fireCooldown = FIRE_INTERVAL; }
+      const wpn = WEAPONS[weapon];
+      if (firingHeld && wpn.auto && !player.dead) {
+        if (fireCooldown <= 0) { wpn.fire(); fireCooldown = wpn.interval; }
         else fireCooldown--;
+      } else if (fireCooldown > 0) {
+        fireCooldown--;
       }
       updateChunks();
       updatePlayer();
       updateBullets();
+      updateRockets();
       updateGrenades();
       updateBloods();
       updateFlashes();
