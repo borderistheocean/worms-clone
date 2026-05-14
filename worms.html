@@ -362,9 +362,16 @@
   }
 
   function render() {
+    // Screen shake — random offset scaled by trauma² so big hits feel chunky.
+    const SHAKE_MAX = 5;
+    const s = shakeTrauma * shakeTrauma;
+    const shakeX = (Math.random() * 2 - 1) * SHAKE_MAX * s;
+    const shakeY = (Math.random() * 2 - 1) * SHAKE_MAX * s;
+    ctx.setTransform(1, 0, 0, 1, shakeX, shakeY);
+
     // Sky already from CSS background, but clear canvas to sky too
     ctx.fillStyle = '#87ceeb';
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, W + SHAKE_MAX * 2, H + SHAKE_MAX * 2);
     // Sun
     ctx.fillStyle = '#fff7cc';
     ctx.beginPath(); ctx.arc(W - 50, 40, 18, 0, Math.PI * 2); ctx.fill();
@@ -505,6 +512,9 @@
   const bullets = [];
   // Visual flashes: { x, y, r, life, maxLife, color }
   const flashes = [];
+  // Screen shake: trauma in [0..1]; shake offset = trauma^2 * SHAKE_MAX
+  let shakeTrauma = 0;
+  function addShake(amount) { shakeTrauma = Math.min(1, shakeTrauma + amount); }
   function fireBullet() {
     const muzzleX = player.x;
     const muzzleY = player.y - player.h / 2;
@@ -526,6 +536,7 @@
       r: 3, maxLife: 4, life: 4,
       color: '#ffe066',
     });
+    addShake(0.75);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -533,6 +544,8 @@
     for (let i = flashes.length - 1; i >= 0; i--) {
       if (--flashes[i].life <= 0) flashes.splice(i, 1);
     }
+    // Trauma decays smoothly each tick
+    shakeTrauma = Math.max(0, shakeTrauma - 0.06);
   }
 
   // Grenades
@@ -594,6 +607,7 @@
         // Big explosion flash — bright core, lingers, fades (clipped to terrain)
         flashes.push({ x: g.x, y: g.y, r: 28, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
         flashes.push({ x: g.x, y: g.y, r: 38, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
+        addShake(0.85);
         grenades.splice(i, 1);
       }
     }
