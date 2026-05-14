@@ -383,6 +383,17 @@
       ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 2, 2);
     }
 
+    // Flashes (muzzle + explosion). Drawn under grenades so a still-pending one stays visible.
+    for (const f of flashes) {
+      const t = f.life / f.maxLife; // 1 → 0 over lifetime
+      ctx.globalAlpha = t;
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r * (0.6 + (1 - t) * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
     // Grenades (blink faster as fuse runs out)
     for (const g of grenades) {
       const blink = g.fuse < 30 ? (g.fuse >> 1) & 1 : ((g.fuse >> 3) & 1);
@@ -465,6 +476,8 @@
 
   // Bullets
   const bullets = [];
+  // Visual flashes: { x, y, r, life, maxLife, color }
+  const flashes = [];
   function fireBullet() {
     const muzzleX = player.x;
     const muzzleY = player.y - player.h / 2;
@@ -479,7 +492,20 @@
       vy: (dy / len) * speed,
       life: 120,
     });
+    // Muzzle flash at the gun tip
+    flashes.push({
+      x: muzzleX + (dx / len) * 7,
+      y: muzzleY + (dy / len) * 7,
+      r: 3, maxLife: 4, life: 4,
+      color: '#ffe066',
+    });
     player.facing = dx >= 0 ? 1 : -1;
+  }
+
+  function updateFlashes() {
+    for (let i = flashes.length - 1; i >= 0; i--) {
+      if (--flashes[i].life <= 0) flashes.splice(i, 1);
+    }
   }
 
   // Grenades
@@ -538,6 +564,9 @@
       g.fuse--;
       if (g.fuse <= 0) {
         carveCircle(g.x, g.y, 22, true);
+        // Big explosion flash — bright core, lingers, fades
+        flashes.push({ x: g.x, y: g.y, r: 28, maxLife: 14, life: 14, color: '#fff2a8' });
+        flashes.push({ x: g.x, y: g.y, r: 38, maxLife: 18, life: 18, color: '#ff8a3a' });
         grenades.splice(i, 1);
       }
     }
@@ -582,6 +611,7 @@
       updatePlayer();
       updateBullets();
       updateGrenades();
+      updateFlashes();
     }
     render();
     requestAnimationFrame(loop);
