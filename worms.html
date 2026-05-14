@@ -241,12 +241,16 @@
   }
 
   // Player
+  const MAX_HP = 100;
   const player = {
     x: W / 2, y: 20,
     w: 6, h: 10,
     vx: 0, vy: 0,
     onGround: false,
     facing: 1,
+    hp: MAX_HP,
+    dead: false,
+    deathTimer: 0,
   };
 
   function playerCollidesAt(px, py) {
@@ -263,6 +267,31 @@
   }
 
   function updatePlayer() {
+    if (player.dead) {
+      // Still subject to gravity so the corpse settles
+      player.vy += 0.18;
+      if (player.vy > 5) player.vy = 5;
+      let my = player.vy;
+      const ydir = my > 0 ? 1 : -1;
+      let ysteps = Math.ceil(Math.abs(my));
+      for (let s = 0; s < ysteps; s++) {
+        const tryY = player.y + ydir;
+        if (!playerCollidesAt(player.x, tryY)) player.y = tryY;
+        else { player.vy = 0; break; }
+      }
+      player.deathTimer++;
+      // Slow drip: a single pixel every ~25 ticks, near the body, leaking sideways/down
+      if ((player.deathTimer % 25) === 0) {
+        bloods.push({
+          x: player.x + (Math.random() - 0.5) * player.h,
+          y: player.y - 1,
+          vx: (Math.random() - 0.5) * 0.4,
+          vy: 0.3 + Math.random() * 0.4,
+          life: 90,
+        });
+      }
+      return;
+    }
     // Horizontal input
     let ax = 0;
     if (keys['arrowleft'] || keys['a']) ax -= 1;
@@ -436,15 +465,32 @@
     }
 
     // Player
-    const px = Math.floor(player.x - player.w / 2);
-    const py = Math.floor(player.y - player.h);
-    ctx.fillStyle = '#ffd9b3';
-    ctx.fillRect(px, py, player.w, 4); // head
-    ctx.fillStyle = '#cc3030';
-    ctx.fillRect(px, py + 4, player.w, player.h - 4); // body
-    // eye
-    ctx.fillStyle = '#000';
-    ctx.fillRect(px + (player.facing > 0 ? player.w - 2 : 1), py + 1, 1, 1);
+    if (player.dead) {
+      // Lying on side: swap width/height, head at facing end
+      const lw = player.h, lh = player.w;
+      const lx = Math.floor(player.x - lw / 2);
+      const ly = Math.floor(player.y - lh);
+      const headRight = player.facing > 0;
+      ctx.fillStyle = '#cc3030';
+      ctx.fillRect(lx, ly, lw, lh); // body slab
+      ctx.fillStyle = '#ffd9b3';
+      ctx.fillRect(headRight ? lx + lw - 4 : lx, ly, 4, lh); // head
+      // X eye
+      ctx.fillStyle = '#000';
+      const eyeX = headRight ? lx + lw - 2 : lx + 1;
+      ctx.fillRect(eyeX, ly + 1, 1, 1);
+    } else {
+      const px = Math.floor(player.x - player.w / 2);
+      const py = Math.floor(player.y - player.h);
+      ctx.fillStyle = '#ffd9b3';
+      ctx.fillRect(px, py, player.w, 4); // head
+      ctx.fillStyle = '#cc3030';
+      ctx.fillRect(px, py + 4, player.w, player.h - 4); // body
+      // eye
+      ctx.fillStyle = '#000';
+      ctx.fillRect(px + (player.facing > 0 ? player.w - 2 : 1), py + 1, 1, 1);
+    }
+    if (!player.dead) {
     // Gun barrel pointing at cursor
     const gx0 = player.x;
     const gy0 = player.y - player.h / 2;
@@ -468,6 +514,18 @@
     ctx.moveTo(mouseX - 3, mouseY); ctx.lineTo(mouseX + 3, mouseY);
     ctx.moveTo(mouseX, mouseY - 3); ctx.lineTo(mouseX, mouseY + 3);
     ctx.stroke();
+    }
+
+    // HP bar above player
+    if (!player.dead) {
+      const hpW = 16;
+      const hpx = Math.floor(player.x - hpW / 2);
+      const hpy = Math.floor(player.y - player.h) - 4;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(hpx - 1, hpy - 1, hpW + 2, 3);
+      ctx.fillStyle = player.hp > 50 ? '#3ad14a' : player.hp > 20 ? '#e0c020' : '#d03030';
+      ctx.fillRect(hpx, hpy, Math.round((player.hp / MAX_HP) * hpW), 1);
+    }
   }
 
   // Input
@@ -476,10 +534,16 @@
   window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     const wasDown = keys[k];
-    if (!wasDown && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = true;
-    if (!wasDown && k === 'g') throwGrenade();
+    if (!wasDown && !player.dead && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = true;
+    if (!wasDown && !player.dead && k === 'g') throwGrenade();
     keys[k] = true;
-    if (k === 'r') generateTerrain();
+    if (k === 'r') {
+      generateTerrain();
+      player.hp = MAX_HP;
+      player.dead = false;
+      player.deathTimer = 0;
+      player.x = W / 2; player.y = 20; player.vx = 0; player.vy = 0;
+    }
     if (e.key === ' ') e.preventDefault();
   });
   window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -499,7 +563,7 @@
     if (e.button === 2) {
       // Right-click: instant crater (kept for terrain experimentation)
       carveCircle(mouseX, mouseY, 14, true);
-    } else {
+    } else if (!player.dead) {
       fireBullet();
       firingHeld = true;
       fireCooldown = FIRE_INTERVAL;
@@ -643,9 +707,13 @@
         const pcx = player.x, pcy = player.y - player.h / 2;
         const ddx = pcx - g.x, ddy = pcy - g.y;
         const dist = Math.hypot(ddx, ddy);
-        const BLAST_R = 32;
-        if (dist < BLAST_R) {
+        const BLAST_R = 60; // damage falloff radius
+        if (dist < BLAST_R && !player.dead) {
           const intensity = 1 - dist / BLAST_R;
+          // Damage: up to ~70 at the centre, falling off with square of closeness
+          const dmg = Math.round(70 * intensity * intensity + 5 * intensity);
+          player.hp = Math.max(0, player.hp - dmg);
+          if (player.hp === 0) { player.dead = true; player.deathTimer = 0; }
           const count = 14 + Math.floor(intensity * 26);
           for (let k = 0; k < count; k++) {
             const ang = Math.atan2(ddy || (Math.random() - 0.5), ddx || (Math.random() - 0.5))
