@@ -377,6 +377,22 @@
     ctx.beginPath(); ctx.arc(W - 50, 40, 18, 0, Math.PI * 2); ctx.fill();
 
     if (terrainDirty) renderTerrain();
+
+    // Explosion flashes — drawn BEFORE terrain so they glow from inside the
+    // crater. The current (post-carve) terrain then overlays them, so the
+    // flash is only visible through the freshly-blown hole, never on top of
+    // intact dirt or sky.
+    for (const f of flashes) {
+      if (!f.explosion) continue;
+      const t = f.life / f.maxLife;
+      ctx.globalAlpha = t;
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r * (0.6 + (1 - t) * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
     ctx.drawImage(terrainCanvas, 0, 0);
 
     // Falling chunks
@@ -392,28 +408,6 @@
     ctx.fillStyle = '#ffeb66';
     for (const b of bullets) {
       ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 2, 2);
-    }
-
-    // Explosion flashes — draw to offscreen, then mask to terrain shape so they
-    // appear over the dirt but never bleed into the sky.
-    let hasExplosion = false;
-    for (const f of flashes) { if (f.explosion) { hasExplosion = true; break; } }
-    if (hasExplosion) {
-      fxctx.clearRect(0, 0, W, H);
-      fxctx.globalCompositeOperation = 'source-over';
-      for (const f of flashes) {
-        if (!f.explosion) continue;
-        const t = f.life / f.maxLife;
-        fxctx.globalAlpha = t;
-        fxctx.fillStyle = f.color;
-        fxctx.beginPath();
-        fxctx.arc(f.x, f.y, f.r * (0.6 + (1 - t) * 0.6), 0, Math.PI * 2);
-        fxctx.fill();
-      }
-      fxctx.globalAlpha = 1;
-      fxctx.globalCompositeOperation = 'destination-in';
-      fxctx.drawImage(terrainCanvas, 0, 0);
-      ctx.drawImage(fxCanvas, 0, 0);
     }
 
     // Muzzle flashes (drawn over everything, including sky)
@@ -604,9 +598,8 @@
       g.fuse--;
       if (g.fuse <= 0) {
         carveCircle(g.x, g.y, 22, true);
-        // Big explosion flash — bright core, lingers, fades (clipped to terrain)
-        flashes.push({ x: g.x, y: g.y, r: 28, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
-        flashes.push({ x: g.x, y: g.y, r: 38, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
+        flashes.push({ x: g.x, y: g.y, r: 14, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
+        flashes.push({ x: g.x, y: g.y, r: 18, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
         addShake(0.85);
         grenades.splice(i, 1);
       }
