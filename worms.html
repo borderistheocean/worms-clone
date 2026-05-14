@@ -95,6 +95,8 @@
   // Falling chunks: pixels relative to (x,y) origin
   const chunks = [];
 
+  const MAX_CHUNK_PIXELS = 200; // bigger floating slabs stay suspended until chipped smaller
+
   function detachFloatingChunks() {
     // Flood-fill from bottom row across all solid pixels
     const visited = new Uint8Array(W * H);
@@ -149,6 +151,11 @@
             }
           }
         }
+        const pixelCount = compPixels.length / 2;
+        // Too big to fall — leave it floating in the grid until further damage breaks it up
+        if (pixelCount > MAX_CHUNK_PIXELS) continue;
+        // Near the limit (>50%) — compact to half height on landing
+        const heavy = pixelCount > MAX_CHUNK_PIXELS / 2;
         // Convert to chunk
         const pixels = new Int16Array(compPixels.length);
         for (let k = 0; k < compPixels.length; k += 2) {
@@ -157,7 +164,7 @@
           pixels[k+1] = gy - minY;
           grid[idx(gx, gy)] = 0; // remove from terrain
         }
-        chunks.push({ pixels, x: minX, y: minY, vy: 0 });
+        chunks.push({ pixels, x: minX, y: minY, vy: 0, heavy });
         terrainDirty = true;
       }
     }
@@ -175,11 +182,35 @@
   }
 
   function stampChunk(chunk) {
+    // For each column of the chunk, preserve its pixel count but re-base it
+    // onto the ground directly beneath that column — no air gaps between chunk
+    // and existing terrain, no internal gaps within the chunk.
     const p = chunk.pixels;
+    const colData = new Map(); // worldX -> { count, maxRelY }
     for (let k = 0; k < p.length; k += 2) {
-      const gx = chunk.x + p[k], gy = chunk.y + p[k+1];
-      if (gy < 0 || gy >= H || gx < 0 || gx >= W) continue;
-      grid[idx(gx, gy)] = 1;
+      const gx = chunk.x + p[k];
+      if (gx < 0 || gx >= W) continue;
+      const relY = p[k+1];
+      const existing = colData.get(gx);
+      if (existing) {
+        existing.count++;
+        if (relY > existing.maxRelY) existing.maxRelY = relY;
+      } else {
+        colData.set(gx, { count: 1, maxRelY: relY });
+      }
+    }
+    for (const [gx, data] of colData) {
+      // Ground top = first solid grid pixel below the chunk's lowest pixel in this column
+      const startY = chunk.y + data.maxRelY + 1;
+      let groundTop = H;
+      for (let y = Math.max(0, startY); y < H; y++) {
+        if (grid[idx(gx, y)] === 1) { groundTop = y; break; }
+      }
+      const stampCount = chunk.heavy ? Math.max(1, Math.floor(data.count / 2)) : data.count;
+      for (let i = 1; i <= stampCount; i++) {
+        const ny = groundTop - i;
+        if (ny >= 0 && ny < H) grid[idx(gx, ny)] = 1;
+      }
     }
     terrainDirty = true;
   }
@@ -414,6 +445,9 @@
     mouseY = Math.floor((e.clientY - rect.top)  * (H / rect.height));
   }
   canvas.addEventListener('mousemove', setMouseFromEvent);
+  let firingHeld = false;
+  let fireCooldown = 0;
+  const FIRE_INTERVAL = 6; // frames between auto-fires while held
   canvas.addEventListener('mousedown', e => {
     setMouseFromEvent(e);
     if (e.button === 2) {
@@ -421,8 +455,11 @@
       carveCircle(mouseX, mouseY, 14, true);
     } else {
       fireBullet();
+      firingHeld = true;
+      fireCooldown = FIRE_INTERVAL;
     }
   });
+  window.addEventListener('mouseup', e => { if (e.button !== 2) firingHeld = false; });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 
   // Bullets
@@ -531,6 +568,10 @@
   generateTerrain();
 
   function loop() {
+    if (firingHeld) {
+      if (fireCooldown <= 0) { fireBullet(); fireCooldown = FIRE_INTERVAL; }
+      else fireCooldown--;
+    }
     updateChunks();
     updatePlayer();
     updateBullets();
