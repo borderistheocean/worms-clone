@@ -436,8 +436,13 @@
     const shakeY = (Math.random() * 2 - 1) * SHAKE_MAX * s;
     ctx.setTransform(1, 0, 0, 1, shakeX, shakeY);
 
-    // Sky already from CSS background, but clear canvas to sky too
-    ctx.fillStyle = '#87ceeb';
+    // Sky — during slow-mo we fade with low alpha so the previous frame's
+    // moving pixels (bullets, blood, rockets) leave motion-blur trails.
+    if (slowmoHeld) {
+      ctx.fillStyle = 'rgba(135,206,235,0.25)';
+    } else {
+      ctx.fillStyle = '#87ceeb';
+    }
     ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, W + SHAKE_MAX * 2, H + SHAKE_MAX * 2);
     // Sun
     ctx.fillStyle = '#fff7cc';
@@ -650,6 +655,17 @@
     ctx.moveTo(mouseX - 3, mouseY); ctx.lineTo(mouseX + 3, mouseY);
     ctx.moveTo(mouseX, mouseY - 3); ctx.lineTo(mouseX, mouseY + 3);
     ctx.stroke();
+    }
+
+    // Slow-mo screen filter — a cool blue tint with vignette at the edges
+    if (slowmoHeld) {
+      ctx.fillStyle = 'rgba(80,140,220,0.18)';
+      ctx.fillRect(0, 0, W, H);
+      const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
+      vg.addColorStop(0, 'rgba(0,0,40,0)');
+      vg.addColorStop(1, 'rgba(0,0,40,0.45)');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
     }
 
     // Game-over overlay
