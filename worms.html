@@ -553,34 +553,51 @@
       // Legs
       ctx.fillStyle = '#2a2a2a';
       const legY = bodyBottom;
-      const legBottom = Math.floor(player.y);
-      const legLeftX  = px + 1;
-      const legRightX = px + player.w - 2;
+      const baseBottom = Math.floor(player.y);
+      const legLeftX  = px + 2;
+      const legRightX = px + player.w - 3;
+      // Per-column ground probe: scan downward from the leg's top until we
+      // find the first solid pixel, so each leg stands on its own surface
+      // even on steep slopes. Wide vertical window so adjacent columns
+      // (which may differ by several pixels) are still reached.
+      function legFootY(col, top) {
+        if (!player.onGround) return baseBottom;
+        if (col < 0 || col >= W) return baseBottom;
+        const minY = top + 1;
+        const maxY = baseBottom + 4;
+        for (let yy = minY; yy <= maxY; yy++) {
+          if (yy >= H) return yy;
+          if (yy >= 0 && grid[idx(col, yy)] === 1) return yy;
+        }
+        return baseBottom;
+      }
+      // Draw a single leg from y=top down to its column's ground (or to baseBottom in air).
+      function drawLeg(col, top) {
+        const foot = legFootY(col, top);
+        const h = Math.max(1, foot - top);
+        ctx.fillRect(col, top, 1, h);
+      }
       if (crouched) {
-        // Both legs bent — short stubs only
-        ctx.fillRect(legLeftX,  legY + 1, 1, legBottom - legY - 1);
-        ctx.fillRect(legRightX, legY + 1, 1, legBottom - legY - 1);
+        drawLeg(legLeftX,  legY + 1);
+        drawLeg(legRightX, legY + 1);
       } else if (!player.onGround) {
-        // Mid-air: tucked legs, slightly apart
+        // Mid-air: tucked legs (fixed short stubs, no ground probe)
         ctx.fillRect(legLeftX,  legY + 1, 1, 2);
         ctx.fillRect(legRightX, legY + 1, 1, 2);
       } else if (Math.abs(player.vx) > 0.01) {
-        // Walking: alternate which leg is forward/back using walkPhase
         const phase = (player.walkPhase >> 2) & 1; // 0 or 1
         const frontDX = player.facing;
         const backDX  = -player.facing;
         if (phase === 0) {
-          // Front leg forward (planted), back leg trailing (lifted 1px)
-          ctx.fillRect(legLeftX + frontDX, legY,     1, legBottom - legY);
-          ctx.fillRect(legRightX + backDX, legY + 1, 1, legBottom - legY - 1);
+          drawLeg(legLeftX  + frontDX, legY);
+          drawLeg(legRightX + backDX,  legY + 1);
         } else {
-          ctx.fillRect(legLeftX + backDX,  legY + 1, 1, legBottom - legY - 1);
-          ctx.fillRect(legRightX + frontDX, legY,    1, legBottom - legY);
+          drawLeg(legLeftX  + backDX,  legY + 1);
+          drawLeg(legRightX + frontDX, legY);
         }
       } else {
-        // Idle stance
-        ctx.fillRect(legLeftX,  legY, 1, legBottom - legY);
-        ctx.fillRect(legRightX, legY, 1, legBottom - legY);
+        drawLeg(legLeftX,  legY);
+        drawLeg(legRightX, legY);
       }
     }
     if (!player.dead) {
