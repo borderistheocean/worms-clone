@@ -1235,12 +1235,15 @@
   // zero while the button stays held.
   let slowmoLocked = false;
   function slowmoActive() {
-    return slowmoHeld && !slowmoLocked && slowmoEnergy > 0 && !player.dead && !paused;
+    const held = slowmoHeld || keys['shift'];
+    return held && !slowmoLocked && slowmoEnergy > 0 && !player.dead && !paused;
   }
   function updateSlowmoEnergy() {
     const now = Date.now();
     const dt = now - slowmoLastMs;
     slowmoLastMs = now;
+    // While paused, don't drain or recharge — just freeze the meter.
+    if (paused) return;
     if (slowmoActive()) {
       slowmoEnergy = Math.max(0, slowmoEnergy - dt);
       if (slowmoEnergy === 0) slowmoLocked = true;
