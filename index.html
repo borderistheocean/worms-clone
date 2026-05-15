@@ -24,7 +24,7 @@
 <div id="wrap">
   <canvas id="c" width="480" height="270"></canvas>
 </div>
-<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • P pause</div>
+<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • Scroll-wheel change weapon • P pause</div>
 <script>
 (() => {
   const W = 480, H = 270;
@@ -1156,15 +1156,10 @@
       player.cooking = true;
       player.cookTime = 0;
     }
-    if (!wasDown && k === '1') {
-      if (DEBUG) { unlockedWeapons.add('builder'); switchWeapon('builder'); }
-      else        switchWeapon('mg');
-    }
-    if (!wasDown && k === '2') {
-      if (DEBUG) { unlockedWeapons.add('laser'); switchWeapon('laser'); }
-      else        switchWeapon('bazooka');
-    }
-    if (!wasDown && k === '3') switchWeapon('dualmg');
+    // Debug number-key shortcuts (only when ?debug=true). Otherwise weapons
+    // are cycled exclusively with the mouse wheel.
+    if (DEBUG && !wasDown && k === '1') { unlockedWeapons.add('builder'); switchWeapon('builder'); }
+    if (DEBUG && !wasDown && k === '2') { unlockedWeapons.add('laser');   switchWeapon('laser'); }
     keys[k] = true;
     if (k === 'r' && player.dead) {
       generateTerrain();
