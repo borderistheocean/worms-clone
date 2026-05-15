@@ -76,13 +76,16 @@
       for (let y = top; y < H; y++) grid[idx(x, y)] = 1;
     }
     // Carve some random caves so destruction has interesting interior
+    const caves = [];
     for (let i = 0; i < 6; i++) {
       const cx = 60 + Math.random() * (W - 120);
       const cy = baseY + 20 + Math.random() * 60;
       const r  = 12 + Math.random() * 20;
       carveCircle(cx, cy, r, false);
+      caves.push({ x: cx, y: cy });
     }
     terrainDirty = true;
+    return caves;
   }
 
   function carveCircle(cx, cy, r, runIsolation = true) {
@@ -314,7 +317,7 @@
       // Big initial burst on the first dead-tick: blood spray everywhere plus
       // a stamped pool on the terrain beneath the body.
       if (player.deathTimer === 0) {
-        for (let k = 0; k < 40; k++) {
+        for (let k = 0; k < 70; k++) {
           const ang = Math.random() * Math.PI * 2;
           const sp = 1.2 + Math.random() * 2.8;
           bloods.push({
@@ -341,7 +344,7 @@
       }
       player.deathTimer++;
       // Heavy bleeding for the first ~1 second, then slow drip.
-      const bleedRate = player.deathTimer < 60 ? 5 : 25;
+      const bleedRate = player.deathTimer < 90 ? 3 : 15;
       if ((player.deathTimer % bleedRate) === 0) {
         bloods.push({
           x: player.x + (Math.random() - 0.5) * player.h,
@@ -614,10 +617,12 @@
     }
     ctx.globalAlpha = 1;
 
-    ctx.drawImage(terrainCanvas, 0, 0);
-
-    // Static trees on top of terrain — sway with current wind
+    // Vegetation behind terrain so grass covers stems/roots
     renderTrees(windNow());
+    renderBushes();
+    renderGrassBlades(windNow());
+
+    ctx.drawImage(terrainCanvas, 0, 0);
 
     // Falling chunks
     for (const c of chunks) {
@@ -714,6 +719,9 @@
       const lx = Math.floor(player.x - lw / 2);
       const ly = Math.floor(player.y - lh);
       const headRight = player.facing > 0;
+      // Outline
+      ctx.fillStyle = '#1a0a0a';
+      ctx.fillRect(lx - 1, ly - 1, lw + 2, lh + 2);
       // Body — duller, slightly stained red so it reads as a corpse
       ctx.fillStyle = '#7a1818';
       ctx.fillRect(lx, ly, lw, lh);
@@ -1315,11 +1323,12 @@
     if (DEBUG && !wasDown && k === '2') { if (!unlockedWeapons.has('laser'))   { unlockedWeapons.add('laser');   weaponOrder.push('laser'); }   switchWeapon('laser'); }
     keys[k] = true;
     if (k === 'r' && player.dead) {
-      generateTerrain();
-      spawnTrees();
+      const caves = generateTerrain();
+      spawnTrees(); spawnBushesAndGrass();
       resetWaves();
       lasers.length = 0;
       packs.length = 0;
+      spawnCavePacks(caves);
       gameStartMs = Date.now();
       finalElapsedMs = null;
       hits = 0;
@@ -1906,19 +1915,20 @@
   const trees = [];
   function spawnTrees() {
     trees.length = 0;
-    const count = 6 + ((Math.random() * 4) | 0);
+    const count = 12 + ((Math.random() * 6) | 0);
     for (let i = 0; i < count; i++) {
       const tx = Math.floor(20 + Math.random() * (W - 40));
       const top = groundTopAt(tx);
       if (top < 0) continue; // no ground here, skip
+      const tcw = 4 + ((Math.random() * 6) | 0);
       trees.push({
         x: tx,
-        rootY: top,                              // current surface position of the trunk base
-        vy: 0,                                   // vertical velocity when terrain drops away
-        h:   6 + ((Math.random() * 5) | 0),     // trunk height
-        cw:  5 + ((Math.random() * 3) | 0),     // canopy half-width
-        ch:  5 + ((Math.random() * 3) | 0),     // canopy half-height
-        sway: Math.random() * 6.28,             // phase offset so they don't all sway in lockstep
+        rootY: top,
+        vy: 0,
+        h:   5 + ((Math.random() * 7) | 0),
+        cw:  tcw,
+        ch:  Math.round(tcw * 0.8),
+        sway: Math.random() * 6.28,
         falling: false,
         fallen: false,
         angle: 0,                                // 0 = upright; +π/2 = flat to the right
@@ -1931,6 +1941,74 @@
     if (x < 0 || x >= W) return -1;
     for (let y = 0; y < H; y++) if (grid[idx(x, y)] === 1) return y;
     return -1;
+  }
+  const bushes = [];
+  const grassBlades = [];
+  function spawnBushesAndGrass() {
+    bushes.length = 0;
+    grassBlades.length = 0;
+    for (let i = 0; i < 18; i++) {
+      const bx = Math.floor(10 + Math.random() * (W - 20));
+      const top = groundTopAt(bx);
+      if (top < 0) continue;
+      bushes.push({
+        x: bx, y: top,
+        w: 3 + ((Math.random() * 4) | 0),
+        h: 2 + ((Math.random() * 3) | 0),
+        sway: Math.random() * 6.28,
+      });
+    }
+    for (let i = 0; i < 50; i++) {
+      const gx = Math.floor(5 + Math.random() * (W - 10));
+      const top = groundTopAt(gx);
+      if (top < 0) continue;
+      grassBlades.push({
+        x: gx, y: top,
+        h: 2 + ((Math.random() * 3) | 0),
+        sway: Math.random() * 6.28,
+      });
+    }
+  }
+  function renderBushes() {
+    // Pass 1: all outlines — overlapping fills will cover internal edges
+    ctx.fillStyle = '#1a5a22';
+    for (const b of bushes) {
+      const top = groundTopAt(b.x);
+      if (top < 0 || top > b.y + 6) continue;
+      b.y = top;
+      for (let y = -b.h - 1; y <= b.h + 1; y++) {
+        for (let x = -b.w - 1; x <= b.w + 1; x++) {
+          const d = (x * x) / ((b.w+1) * (b.w+1)) + (y * y) / ((b.h+1) * (b.h+1));
+          if (d <= 1) ctx.fillRect(b.x + x, b.y + y - 1, 1, 1);
+        }
+      }
+    }
+    // Pass 2: all fills on top — merges overlapping bushes into one shape
+    ctx.fillStyle = '#38a848';
+    for (const b of bushes) {
+      if (groundTopAt(b.x) < 0) continue;
+      for (let y = -b.h; y <= b.h; y++) {
+        for (let x = -b.w; x <= b.w; x++) {
+          const d = (x * x) / (b.w * b.w) + (y * y) / (b.h * b.h);
+          if (d <= 1) ctx.fillRect(b.x + x, b.y + y - 1, 1, 1);
+        }
+      }
+    }
+  }
+  function renderGrassBlades(w) {
+    for (const g of grassBlades) {
+      const top = groundTopAt(g.x);
+      if (top < 0 || top > g.y + 6) continue;
+      g.y = top;
+      const sw = Math.round(w * 1.8 * Math.sin(windT * 0.05 + g.sway));
+      ctx.fillStyle = '#2a7a32';
+      for (let i = 0; i < g.h; i++) {
+        const dx = Math.round((i / g.h) * sw);
+        ctx.fillRect(g.x + dx, g.y - i - 1, 1, 1);
+      }
+      ctx.fillStyle = '#4cb850';
+      ctx.fillRect(g.x + Math.round(sw), g.y - g.h, 1, 1);
+    }
   }
   function renderClouds() {
     const grey = Math.round(255 - dayProgress * 140);
@@ -1987,7 +2065,7 @@
       if (t.fallen) {
         t.fadeT = (t.fadeT || 0) + 1;
         // Only remove the tree once both trunk and canopy are done fading.
-        const trunkGone  = t.fadeT > 90;
+        const trunkGone  = true;
         const canopyGone = !t.canopyDetached || t.canopyFadeT > 90;
         if (trunkGone && canopyGone) trees.splice(i, 1);
         continue;
@@ -2050,17 +2128,22 @@
       const baseY = t.rootY;
       const sway = t.fallen
         ? 0
-        : Math.round(w * 2.2 * Math.sin(windT * 0.04 + t.sway));
+        : Math.round(w * 0.6 * Math.sin(windT * 0.025 + t.sway));
 
       // --- Trunk (stump) ---
       ctx.save();
       ctx.translate(t.x, baseY);
-      if (t.fallen) ctx.globalAlpha = Math.max(0, 1 - (t.fadeT || 0) / 90);
-      ctx.fillStyle = '#5a3a18';
-      for (let i = 0; i < t.h; i++) {
-        const dx = t.fallen ? 0 : Math.round((i / t.h) * sway);
-        ctx.fillRect(dx,     -i - 1, 1, 1);
-        ctx.fillRect(dx + 1, -i - 1, 1, 1);
+      if (!t.fallen) {
+        // Trunk outline
+        ctx.fillStyle = '#3a2208';
+        for (let i = 0; i < t.h; i++) {
+          ctx.fillRect(-1, -i - 2, 4, 3);
+        }
+        ctx.fillStyle = '#5a3a18';
+        for (let i = 0; i < t.h; i++) {
+          ctx.fillRect(0,  -i - 1, 1, 1);
+          ctx.fillRect(1,  -i - 1, 1, 1);
+        }
       }
       ctx.restore();
 
@@ -2081,6 +2164,14 @@
       }
       if (canopyAlpha <= 0) continue;
       ctx.globalAlpha = canopyAlpha;
+      // Canopy outline
+      ctx.fillStyle = '#1a5a22';
+      for (let y = -t.ch - 1; y <= t.ch + 1; y++) {
+        for (let x = -t.cw - 1; x <= t.cw + 1; x++) {
+          const d = (x * x) / ((t.cw+1) * (t.cw+1)) + (y * y) / ((t.ch+1) * (t.ch+1));
+          if (d <= 1) ctx.fillRect(Math.floor(cwx) + x, Math.floor(cwy) + y, 1, 1);
+        }
+      }
       ctx.fillStyle = '#2c8a3a';
       for (let y = -t.ch; y <= t.ch; y++) {
         for (let x = -t.cw; x <= t.cw; x++) {
@@ -2165,6 +2256,7 @@
               });
             }
           } else {
+            if (player.hp >= MAX_HP) continue;
             player.hp = Math.min(MAX_HP, player.hp + HEAL_AMOUNT);
             for (let k = 0; k < 10; k++) {
               const ang = Math.random() * Math.PI * 2;
@@ -2581,9 +2673,27 @@
     return Math.floor(survivedMs() / 100) + hits * 50;
   }
 
+  function spawnCavePacks(caves) {
+    const count = 2 + ((Math.random() * 3) | 0);
+    const shuffled = caves.slice().sort(() => Math.random() - 0.5);
+    for (let i = 0; i < Math.min(count, shuffled.length); i++) {
+      const c = shuffled[i];
+      packs.push({
+        x: Math.max(8, Math.min(W - 8, c.x | 0)),
+        y: c.y | 0,
+        vy: 0.4,
+        landed: false,
+        idle: 0,
+        bob: Math.random() * 6.28,
+        kind: 'health',
+      });
+    }
+  }
+
   // Boot
-  generateTerrain();
-  spawnTrees();
+  const initCaves = generateTerrain();
+  spawnTrees(); spawnBushesAndGrass();
+  spawnCavePacks(initCaves);
   resetWaves();
 
   const TIME_SCALE = 0.6; // <1 = slower world; render still runs every frame
