@@ -524,11 +524,21 @@
     const sr = Math.min(255, Math.round(skyR + purpleT * 40));
     const sg = Math.max(0,   Math.round(skyG - purpleT * 50));
     const sb = Math.round(skyB * (1 - purpleT * 0.15) + purpleT * 30);
+    const br = Math.max(0, Math.round(sr * 0.75));
+    const bg = Math.max(0, Math.round(sg * 0.65));
+    const bb = Math.max(0, Math.round(sb * 0.8));
+    const grad = ctx.createLinearGradient(0, -SHAKE_MAX, 0, H + SHAKE_MAX);
     if (slowmoActive()) {
-      ctx.fillStyle = `rgba(${sr},${sg},${sb},0.25)`;
+      grad.addColorStop(0,   `rgba(${sr},${sg},${sb},0.25)`);
+      grad.addColorStop(0.85, `rgba(${sr},${sg},${sb},0.25)`);
+
+      grad.addColorStop(1,   `rgba(${br},${bg},${bb},0.25)`);
     } else {
-      ctx.fillStyle = `rgb(${sr},${sg},${sb})`;
+      grad.addColorStop(0,   `rgb(${sr},${sg},${sb})`);
+      grad.addColorStop(0.85, `rgb(${sr},${sg},${sb})`);
+      grad.addColorStop(1,   `rgb(${br},${bg},${bb})`);
     }
+    ctx.fillStyle = grad;
     ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, W + SHAKE_MAX * 2, H + SHAKE_MAX * 2);
 
     // Stars — fade in as night approaches
@@ -1817,16 +1827,17 @@
   }
 
   const clouds = [];
+  function makeCloud(startX) {
+    return {
+      x: startX,
+      y: 8 + Math.random() * 65,
+      scale: 0.7 + Math.random() * 0.9,
+      speed: 0.04 + Math.random() * 0.06,
+    };
+  }
   function spawnClouds() {
     clouds.length = 0;
-    for (let i = 0; i < 5; i++) {
-      clouds.push({
-        x: Math.random() * W,
-        y: 10 + Math.random() * 60,
-        scale: 0.7 + Math.random() * 0.9,
-        speed: 0.06 + Math.random() * 0.08,
-      });
-    }
+    for (let i = 0; i < 6; i++) clouds.push(makeCloud(Math.random() * W));
   }
 
   const trees = [];
@@ -1859,9 +1870,9 @@
     return -1;
   }
   function renderClouds() {
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    const grey = Math.round(255 - dayProgress * 140);
+    ctx.fillStyle = `rgba(${grey},${grey},${grey},0.85)`;
     for (const c of clouds) {
-      // Cloud built from a few overlapping circles
       const r = 6 * c.scale;
       ctx.beginPath();
       ctx.arc(c.x,        c.y,        r,        0, Math.PI * 2);
@@ -1954,12 +1965,15 @@
     }
   }
 
-  function updateClouds(w) {
-    for (const c of clouds) {
-      c.x += c.speed + w * 0.4;
+  function updateClouds() {
+    const waveSpeed = 1 + waveIndex * 0.15;
+    for (let i = 0; i < clouds.length; i++) {
+      const c = clouds[i];
+      c.x += c.speed * waveSpeed;
       const span = 30 * c.scale;
-      if (c.x - span > W) c.x = -span;
-      if (c.x + span < 0) c.x = W + span;
+      if (c.x - span > W) {
+        clouds[i] = makeCloud(-span - Math.random() * 40);
+      }
     }
   }
   function renderTrees(w) {
@@ -2532,7 +2546,7 @@
         fireShakeRamp = Math.max(0, fireShakeRamp - 2);
       }
       windT++;
-      updateClouds(windNow());
+      updateClouds();
       updateTrees();
       updateChunks();
       updatePlayer();
