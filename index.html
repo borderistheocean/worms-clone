@@ -24,7 +24,7 @@
 <div id="wrap">
   <canvas id="c" width="480" height="270"></canvas>
 </div>
-<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • Scroll-wheel change weapon • P pause</div>
+<div id="hud">A/D or ←/→ move • S/↓ duck • W/Space/↑ jump • Left-click shoot • Right-click slow-mo • Scroll-wheel/Q change weapon • P pause</div>
 <script>
 (() => {
   const W = 480, H = 270;
@@ -1003,29 +1003,6 @@
       ctx.textBaseline = 'alphabetic';
     }
 
-    // Pause overlay — block of "PAUSED" + hint centred around the middle.
-    if (paused) {
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(0, 0, W, H);
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const blockH = 28 + 8 + 10;          // title height + gap + hint height
-      const titleY = H / 2 - blockH / 2 + 14;
-      const hintY  = titleY + 28;
-      ctx.font = 'bold 28px monospace';
-      ctx.fillStyle = '#000';
-      ctx.fillText('PAUSED', W / 2 + 2, titleY + 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText('PAUSED', W / 2, titleY);
-      ctx.font = '10px monospace';
-      ctx.fillStyle = '#000';
-      ctx.fillText('Press P to resume', W / 2 + 1, hintY + 1);
-      ctx.fillStyle = '#cfe8ff';
-      ctx.fillText('Press P to resume', W / 2, hintY);
-      ctx.textAlign = 'start';
-      ctx.textBaseline = 'alphabetic';
-    }
-
     // Game-over overlay — title + stat lines + reload hint, centred as a block.
     if (player.dead) {
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
@@ -1084,6 +1061,29 @@
         ctx.fillRect(hpx, hpy - 5, Math.round(filled * hpW), 1);
       }
     }
+
+    // Pause overlay — block of "PAUSED" + hint centred around the middle.
+    if (paused) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const blockH = 28 + 8 + 10;
+      const titleY = H / 2 - blockH / 2 + 14;
+      const hintY  = titleY + 28;
+      ctx.font = 'bold 28px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText('PAUSED', W / 2 + 2, titleY + 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('PAUSED', W / 2, titleY);
+      ctx.font = '10px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText('Press P to resume', W / 2 + 1, hintY + 1);
+      ctx.fillStyle = '#cfe8ff';
+      ctx.fillText('Press P to resume', W / 2, hintY);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
   }
 
   // Weapons
@@ -1130,8 +1130,9 @@
     const wasDown = keys[k];
     // P toggles pause. Everything else is suppressed while paused, so a held
     // key from before the pause doesn't keep moving the player on resume.
-    if (!wasDown && k === 'p') { paused = !paused; keys[k] = true; return; }
+    if (!wasDown && k === 'p' && !player.dead) { paused = !paused; keys[k] = true; return; }
     if (paused) { if (e.key === ' ') e.preventDefault(); return; }
+    if (!wasDown && k === 'q' && !player.dead) cycleWeapon(1);
     if (!wasDown && !player.dead && (k === ' ' || k === 'w' || k === 'arrowup')) jumpQueued = JUMP_BUFFER;
     // Double-tap A/D (or arrows) for a quick dash. Records the moment each
     // direction key was pressed; a second press inside DASH_WINDOW_MS while
@@ -1256,6 +1257,7 @@
   }
   window.addEventListener('mousedown', e => {
     setMouseFromEvent(e);
+    if (paused) return;
     if (e.button === 2) {
       slowmoHeld = true;
     } else if (!player.dead) {
@@ -1276,7 +1278,13 @@
   const flashes = [];
   // Screen shake: trauma in [0..1]; shake offset = trauma^2 * SHAKE_MAX
   let shakeTrauma = 0;
+  let fireShakeRamp = 0;
+  const FIRE_RAMP_TICKS = 120;
   function addShake(amount) { shakeTrauma = Math.min(1, shakeTrauma + amount); }
+  function addFireShake(amount) {
+    const t = Math.min(1, fireShakeRamp / FIRE_RAMP_TICKS);
+    addShake(amount * (0.05 + 0.95 * t));
+  }
   function fireBullet() {
     const muzzleX = player.x;
     const muzzleY = player.y - player.h / 2;
@@ -1298,7 +1306,7 @@
       r: 3, maxLife: 4, life: 4,
       color: '#ffe066',
     });
-    addShake(0.75);
+    addFireShake(0.75);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1374,7 +1382,7 @@
     }
     detachFloatingChunks();
     playerBeams.push({ x0, y0, x1: endX, y1: endY, life: 14, maxLife: 14 });
-    addShake(1.0);
+    addFireShake(1.0);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1463,7 +1471,7 @@
       r: 3, maxLife: 4, life: 4,
       color: '#caa070',
     });
-    addShake(0.25);
+    addFireShake(0.25);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1491,7 +1499,7 @@
       r: 4, maxLife: 5, life: 5,
       color: '#ffe066',
     });
-    addShake(0.85);
+    addFireShake(0.85);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1589,7 +1597,7 @@
     rockets.push(r);
     guidedRocket = r;
     player.facing = dx >= 0 ? 1 : -1;
-    addShake(0.3);
+    addFireShake(0.3);
   }
   function updateRockets() {
     for (let i = rockets.length - 1; i >= 0; i--) {
@@ -2439,8 +2447,10 @@
       if (firingHeld && wpn.auto && !player.dead) {
         if (fireCooldown <= 0) { wpn.fire(); fireCooldown = wpn.interval; }
         else fireCooldown--;
-      } else if (fireCooldown > 0) {
-        fireCooldown--;
+        fireShakeRamp = Math.min(FIRE_RAMP_TICKS, fireShakeRamp + 1);
+      } else {
+        if (fireCooldown > 0) fireCooldown--;
+        fireShakeRamp = Math.max(0, fireShakeRamp - 2);
       }
       windT++;
       updateClouds(windNow());
