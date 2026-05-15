@@ -1956,6 +1956,7 @@
         w: 3 + ((Math.random() * 4) | 0),
         h: 2 + ((Math.random() * 3) | 0),
         sway: Math.random() * 6.28,
+        dead: false, fadeT: 0,
       });
     }
     for (let i = 0; i < 50; i++) {
@@ -1969,30 +1970,46 @@
       });
     }
   }
+  function updateBushes() {
+    for (let i = bushes.length - 1; i >= 0; i--) {
+      const b = bushes[i];
+      if (b.dead) {
+        b.fadeT++;
+        if (b.fadeT > 60) { bushes.splice(i, 1); }
+        continue;
+      }
+      const top = groundTopAt(b.x);
+      if (top < 0 || top > b.y + 4) {
+        b.dead = true; b.fadeT = 0;
+      } else {
+        b.y = top;
+      }
+    }
+  }
   function renderBushes() {
-    // Pass 1: all outlines — overlapping fills will cover internal edges
+    // Pass 1: all outlines
     ctx.fillStyle = '#1a5a22';
     for (const b of bushes) {
-      const top = groundTopAt(b.x);
-      if (top < 0 || top > b.y + 6) continue;
-      b.y = top;
+      if (b.dead) ctx.globalAlpha = Math.max(0, 1 - b.fadeT / 60);
       for (let y = -b.h - 1; y <= b.h + 1; y++) {
         for (let x = -b.w - 1; x <= b.w + 1; x++) {
           const d = (x * x) / ((b.w+1) * (b.w+1)) + (y * y) / ((b.h+1) * (b.h+1));
           if (d <= 1) ctx.fillRect(b.x + x, b.y + y - 1, 1, 1);
         }
       }
+      if (b.dead) ctx.globalAlpha = 1;
     }
     // Pass 2: all fills on top — merges overlapping bushes into one shape
     ctx.fillStyle = '#38a848';
     for (const b of bushes) {
-      if (groundTopAt(b.x) < 0) continue;
+      if (b.dead) ctx.globalAlpha = Math.max(0, 1 - b.fadeT / 60);
       for (let y = -b.h; y <= b.h; y++) {
         for (let x = -b.w; x <= b.w; x++) {
           const d = (x * x) / (b.w * b.w) + (y * y) / (b.h * b.h);
           if (d <= 1) ctx.fillRect(b.x + x, b.y + y - 1, 1, 1);
         }
       }
+      if (b.dead) ctx.globalAlpha = 1;
     }
   }
   function renderGrassBlades(w) {
@@ -2725,6 +2742,7 @@
       windT++;
       updateClouds();
       updateTrees();
+      updateBushes();
       updateChunks();
       updatePlayer();
       updateBullets();
