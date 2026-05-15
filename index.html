@@ -6,7 +6,7 @@
 <style>
   html, body { margin: 0; height: 100%; width: 100%; background: #111; overflow: hidden;
     font-family: monospace; color: #ddd; }
-  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; user-select: none; }
   /* Canvas keeps its 480x270 internal resolution but scales to fill the
      viewport while preserving the 16:9 aspect ratio (letterboxed if the
      window aspect is off). #wrap sizes to match so the HUD overlays it. */
@@ -1182,8 +1182,8 @@
     laser:   { name: 'LASER',   fire: firePlayerLaser, interval: 150, auto: false },
   };
   const DEBUG = new URLSearchParams(location.search).get('debug') === 'true';
-  const WEAPON_ORDER = ['mg', 'bazooka', 'dualmg', 'builder', 'laser'];
-  let unlockedWeapons = new Set(['mg', 'bazooka']);
+  let weaponOrder = ['mg'];
+  let unlockedWeapons = new Set(['mg']);
   let weapon = 'mg';
   let weaponLabelTime = 0; // ticks remaining for the on-screen weapon name
   let weaponLabelText = '';
@@ -1200,7 +1200,7 @@
     weaponLabelTime = 120;
   }
   function cycleWeapon(dir) {
-    const order = WEAPON_ORDER.filter(w => unlockedWeapons.has(w));
+    const order = weaponOrder;
     const i = order.indexOf(weapon);
     const next = order[(i + dir + order.length) % order.length];
     switchWeapon(next);
@@ -1247,8 +1247,8 @@
     }
     // Debug number-key shortcuts (only when ?debug=true). Otherwise weapons
     // are cycled exclusively with the mouse wheel.
-    if (DEBUG && !wasDown && k === '1') { unlockedWeapons.add('builder'); switchWeapon('builder'); }
-    if (DEBUG && !wasDown && k === '2') { unlockedWeapons.add('laser');   switchWeapon('laser'); }
+    if (DEBUG && !wasDown && k === '1') { if (!unlockedWeapons.has('builder')) { unlockedWeapons.add('builder'); weaponOrder.push('builder'); } switchWeapon('builder'); }
+    if (DEBUG && !wasDown && k === '2') { if (!unlockedWeapons.has('laser'))   { unlockedWeapons.add('laser');   weaponOrder.push('laser'); }   switchWeapon('laser'); }
     keys[k] = true;
     if (k === 'r' && player.dead) {
       generateTerrain();
@@ -1268,11 +1268,10 @@
       hitStopFrames = 0;
       dashCooldown = 0;
       lastTapLeft = lastTapRight = 0;
-      firstKillDropUsed = false;
-      fourthKillDropUsed = false;
-      sixthKillDropUsed = false;
       killCount = 0;
-      unlockedWeapons = new Set(['mg', 'bazooka']);
+      nextDropIndex = 0;
+      weaponOrder = ['mg'];
+      unlockedWeapons = new Set(['mg']);
       if (!unlockedWeapons.has(weapon)) { weapon = 'mg'; updateWeaponHud(); }
       player.hp = MAX_HP;
       player.dead = false;
@@ -2080,14 +2079,11 @@
         const dx = Math.abs(p.x - player.x);
         const dy = Math.abs(p.y - (player.y - player.h / 2));
         if (dx < 4 && dy < player.h / 2 + 2) {
-          if (p.kind === 'weapon-dualmg' || p.kind === 'weapon-builder' || p.kind === 'weapon-laser') {
-            const newWeapon = p.kind === 'weapon-builder' ? 'builder'
-                            : p.kind === 'weapon-laser'   ? 'laser'
-                                                          : 'dualmg';
-            const sparkColor = p.kind === 'weapon-builder' ? '#caa070'
-                             : p.kind === 'weapon-laser'   ? '#ff2030'
-                                                           : '#ffdc40';
-            unlockedWeapons.add(newWeapon);
+          if (p.kind.startsWith('weapon-')) {
+            const newWeapon = p.kind.replace('weapon-', '');
+            const sparkColors = { bazooka: '#ff8a3a', dualmg: '#ffdc40', builder: '#caa070', laser: '#ff2030' };
+            const sparkColor = sparkColors[newWeapon] || '#ffdc40';
+            if (!unlockedWeapons.has(newWeapon)) { unlockedWeapons.add(newWeapon); weaponOrder.push(newWeapon); }
             flashWeaponPickup(newWeapon);
             for (let k = 0; k < 12; k++) {
               const ang = Math.random() * Math.PI * 2;
@@ -2119,6 +2115,7 @@
   }
   const WEAPON_PACK_LABEL = {
     'weapon-dualmg':  'DUAL MG',
+    'weapon-bazooka':  'BAZOOKA',
     'weapon-builder': 'BUILDER',
     'weapon-laser':   'LASER',
   };
@@ -2152,7 +2149,14 @@
       // Crate body — health: white w/ red cross; weapon: yellow w/ dark icon
       ctx.fillStyle = '#000';
       ctx.fillRect(x - 3, y - 2, 7, 5);
-      if (p.kind === 'weapon-dualmg') {
+      if (p.kind === 'weapon-bazooka') {
+        ctx.fillStyle = '#5a3a20';
+        ctx.fillRect(x - 2, y - 1, 5, 3);
+        ctx.fillStyle = '#3a2a1a';
+        ctx.fillRect(x - 1, y, 3, 1);
+        ctx.fillStyle = '#5a3a20';
+        ctx.fillRect(x + 1, y - 1, 1, 1);
+      } else if (p.kind === 'weapon-dualmg') {
         ctx.fillStyle = '#ffd820';
         ctx.fillRect(x - 2, y - 1, 5, 3);
         ctx.fillStyle = '#2a2a2a';
@@ -2254,20 +2258,9 @@
       u.vy = 0.5 + Math.random() * 0.5;
       killCount++;
       hitStopFrames = Math.max(hitStopFrames, 2);
-      // First kill of the run drops a DUAL MG weapon crate.
-      if (!firstKillDropUsed) {
-        firstKillDropUsed = true;
-        spawnPack(u.x + (Math.random() - 0.5) * 20, 'weapon-dualmg');
-      }
-      // Fourth kill drops the terrain-builder weapon.
-      if (!fourthKillDropUsed && killCount >= 4) {
-        fourthKillDropUsed = true;
-        spawnPack(u.x + (Math.random() - 0.5) * 20, 'weapon-builder');
-      }
-      // Third kill drops the LASER.
-      if (!sixthKillDropUsed && killCount >= 3) {
-        sixthKillDropUsed = true;
-        spawnPack(u.x + (Math.random() - 0.5) * 20, 'weapon-laser');
+      if (nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
+        spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
+        nextDropIndex++;
       }
     }
   }
@@ -2497,10 +2490,14 @@
   let gameStartMs = Date.now();
   let finalElapsedMs = null;   // frozen value at the moment the player died
   let hits = 0;                // shots landed on enemy ships
-  let firstKillDropUsed = false; // one-shot flag for the wave-1 weapon drop
-  let killCount = 0;             // total UFOs downed this run
-  let fourthKillDropUsed = false;
-  let sixthKillDropUsed = false;
+  let killCount = 0;
+  const WEAPON_DROPS = [
+    { kill: 1, kind: 'weapon-bazooka' },
+    { kill: 3, kind: 'weapon-dualmg' },
+    { kill: 5, kind: 'weapon-builder' },
+    { kill: 7, kind: 'weapon-laser' },
+  ];
+  let nextDropIndex = 0;
   function survivedMs() {
     return finalElapsedMs !== null ? finalElapsedMs : (Date.now() - gameStartMs);
   }
