@@ -542,12 +542,12 @@
     ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, W + SHAKE_MAX * 2, H + SHAKE_MAX * 2);
 
     // Stars — fade in as night approaches
-    if (dayT > 0.3) {
-      const starAlpha = Math.min(1, (dayT - 0.3) / 0.5);
+    if (dayT > 0.15) {
+      const starAlpha = Math.min(1, (dayT - 0.15) / 0.25);
       ctx.fillStyle = `rgba(255,255,255,${starAlpha.toFixed(2)})`;
       // Deterministic star field from seed
       let seed = 12345;
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 80; i++) {
         seed = (seed * 16807 + 7) % 2147483647;
         const sx = (seed % W);
         seed = (seed * 16807 + 7) % 2147483647;
@@ -1075,7 +1075,7 @@
       ctx.fillText(WEAPONS[weapon].name, hx + 14, hy + 4);
     }
 
-    if (introTimer > 0) {
+    if (introTimer > 0 && !paused) {
       const alpha = Math.min(1, introTimer / 60);
       ctx.globalAlpha = alpha;
       ctx.textAlign = 'center';
@@ -1085,6 +1085,11 @@
       ctx.fillText("TRY 'N' SURVIVE", W / 2 + 2, H / 2 + 2);
       ctx.fillStyle = '#ffe060';
       ctx.fillText("TRY 'N' SURVIVE", W / 2, H / 2);
+      ctx.font = '8px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText('© 2005', W / 2 + 2, H / 2 + 24);
+      ctx.fillStyle = '#fff';
+      ctx.fillText('© 2005', W / 2, H / 2 + 22);
       ctx.globalAlpha = 1;
       ctx.textAlign = 'start';
       ctx.textBaseline = 'alphabetic';
@@ -1836,7 +1841,7 @@
   }
   function spawnClouds() {
     clouds.length = 0;
-    for (let i = 0; i < 6; i++) clouds.push(makeCloud(Math.random() * W));
+    for (let i = 0; i < 10; i++) clouds.push(makeCloud(Math.random() * W));
   }
 
   const trees = [];
@@ -1874,10 +1879,12 @@
     for (const c of clouds) {
       const r = 6 * c.scale;
       ctx.beginPath();
-      ctx.arc(c.x,        c.y,        r,        0, Math.PI * 2);
-      ctx.arc(c.x + r,    c.y - r*0.3, r*0.9,   0, Math.PI * 2);
-      ctx.arc(c.x - r*0.8,c.y,         r*0.7,   0, Math.PI * 2);
-      ctx.arc(c.x + r*1.7,c.y + r*0.1, r*0.7,   0, Math.PI * 2);
+      ctx.arc(c.x - r*1.2, c.y + r*0.1, r*0.6,  0, Math.PI * 2);
+      ctx.arc(c.x - r*0.5, c.y,         r*0.8,   0, Math.PI * 2);
+      ctx.arc(c.x,          c.y,         r,       0, Math.PI * 2);
+      ctx.arc(c.x + r,      c.y - r*0.3, r*0.9,  0, Math.PI * 2);
+      ctx.arc(c.x + r*1.8,  c.y + r*0.1, r*0.7,  0, Math.PI * 2);
+      ctx.arc(c.x + r*2.5,  c.y + r*0.15,r*0.55, 0, Math.PI * 2);
       ctx.fill();
     }
   }
