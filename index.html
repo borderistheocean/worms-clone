@@ -506,9 +506,9 @@
                        (y > 0   && grid[idx(x, y-1)] !== 1) ||
                        (y < H-1 && grid[idx(x, y+1)] !== 1);
         if (hasAir) {
-          d[di]   = 90;
-          d[di+1] = 58;
-          d[di+2] = 30;
+          d[di]   = COL_DIRT2[0];
+          d[di+1] = COL_DIRT2[1];
+          d[di+2] = COL_DIRT2[2];
         }
       }
     }
@@ -1779,7 +1779,7 @@
         r.y += r.vy / steps;
         const gx = Math.floor(r.x), gy = Math.floor(r.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
-        { const u = ufoAt(r.x, r.y); if (u) { damageUfo(u, Math.ceil(u.maxHp / 2)); hit = true; break; } }
+        { const u = ufoAt(r.x, r.y); if (u) { damageUfo(u, Math.ceil(u.maxHp * 0.8)); hit = true; break; } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
       }
       r.life--;
@@ -1893,14 +1893,14 @@
   function makeCloud(startX) {
     return {
       x: startX,
-      y: 8 + Math.random() * 65,
+      y: 8 + Math.random() * 110,
       scale: 0.7 + Math.random() * 0.9,
       speed: 0.04 + Math.random() * 0.06,
     };
   }
   function spawnClouds() {
     clouds.length = 0;
-    for (let i = 0; i < 10; i++) clouds.push(makeCloud(Math.random() * W));
+    for (let i = 0; i < 22; i++) clouds.push(makeCloud(Math.random() * (W + 60) - 30));
   }
 
   const trees = [];
