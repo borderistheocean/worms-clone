@@ -2713,20 +2713,25 @@
   spawnCavePacks(initCaves);
   resetWaves();
 
-  const TIME_SCALE = 0.6; // <1 = slower world; render still runs every frame
+  const TARGET_FPS = 60;
+  const TICK_MS = 1000 / TARGET_FPS;
+  const TIME_SCALE = 0.6;
   const SLOWMO_SCALE = 0.15;
   let tickAccum = 0;
-  function loop() {
+  let lastFrameMs = performance.now();
+  function loop(nowMs) {
+    const elapsed = Math.min(nowMs - lastFrameMs, 100);
+    lastFrameMs = nowMs;
+    const frames = elapsed / TICK_MS;
     updateSlowmoEnergy();
     updateBuilderEnergy();
     if (paused) {
       tickAccum = 0;
     } else if (hitStopFrames > 0) {
-      // Freeze the world for a couple of render frames for "hit-stop" punch.
       hitStopFrames--;
       tickAccum = 0;
     } else {
-      tickAccum += slowmoActive() ? SLOWMO_SCALE : TIME_SCALE;
+      tickAccum += frames * (slowmoActive() ? SLOWMO_SCALE : TIME_SCALE);
     }
     while (tickAccum >= 1) {
       tickAccum -= 1;
@@ -2769,7 +2774,7 @@
     render();
     requestAnimationFrame(loop);
   }
-  loop();
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>
