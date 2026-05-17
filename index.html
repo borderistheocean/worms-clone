@@ -635,6 +635,7 @@
 
     // UFOs + lasers (above clouds/terrain, below player projectiles)
     renderUfos();
+    renderUfoDebris();
     renderLasers();
     renderPacks();
 
@@ -1254,8 +1255,8 @@
     laser:   { name: 'LASER',   fire: firePlayerLaser, interval: 150, auto: false },
   };
   const DEBUG = new URLSearchParams(location.search).get('debug') === 'true';
-  let weaponOrder = ['mg'];
-  let unlockedWeapons = new Set(['mg']);
+  let weaponOrder = DEBUG ? ['mg', 'bazooka', 'dualmg', 'builder', 'laser'] : ['mg'];
+  let unlockedWeapons = DEBUG ? new Set(['mg', 'bazooka', 'dualmg', 'builder', 'laser']) : new Set(['mg']);
   let weapon = 'mg';
   let weaponLabelTime = 0; // ticks remaining for the on-screen weapon name
   let weaponLabelText = '';
@@ -1343,8 +1344,8 @@
       lastTapLeft = lastTapRight = 0;
       killCount = 0;
       nextDropIndex = 0;
-      weaponOrder = ['mg'];
-      unlockedWeapons = new Set(['mg']);
+      weaponOrder = DEBUG ? ['mg', 'bazooka', 'dualmg', 'builder', 'laser'] : ['mg'];
+      unlockedWeapons = DEBUG ? new Set(['mg', 'bazooka', 'dualmg', 'builder', 'laser']) : new Set(['mg']);
       if (!unlockedWeapons.has(weapon)) { weapon = 'mg'; updateWeaponHud(); }
       player.hp = MAX_HP;
       player.dead = false;
@@ -1516,6 +1517,144 @@
 
   // Player laser beam: visible for a few frames so the player sees the cut.
   const playerBeams = [];
+  // UFO debris halves — created when the laser bisects a ship
+  const ufoDebris = [];
+
+  function bisectUfo(u, beamX, beamY, beamUx, beamUy) {
+    // Remove the UFO from the active list
+    const idx2 = ufos.indexOf(u);
+    if (idx2 !== -1) ufos.splice(idx2, 1);
+    // Trigger death explosion for nearby ships
+    ufoDeathExplosion(u);
+    killCount++;
+    hits++;
+    hitStopFrames = Math.max(hitStopFrames, 3);
+    if (!DEBUG && nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
+      spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
+      nextDropIndex++;
+    }
+    // Determine cut position relative to UFO center (local X offset)
+    const cutLocalX = beamX - u.x;
+    // Perpendicular to beam direction for the shunt
+    const perpX = -beamUy;
+    const perpY = beamUx;
+    // Create two halves: left and right of the cut line
+    const leftW = Math.max(2, Math.floor(UFO_W / 2 + cutLocalX));
+    const rightW = Math.max(2, UFO_W - leftW);
+    // Left half
+    ufoDebris.push({
+      x: u.x - (UFO_W / 2 - leftW / 2),
+      y: u.y,
+      vx: -0.8 - Math.random() * 0.5 + perpX * 0.5,
+      vy: -0.5 - Math.random() * 0.8,
+      rot: 0,
+      rotSpeed: -0.04 - Math.random() * 0.06,
+      side: 'left',
+      clipW: leftW,
+      fullW: UFO_W,
+      life: 300,
+    });
+    // Right half
+    ufoDebris.push({
+      x: u.x + (UFO_W / 2 - rightW / 2),
+      y: u.y,
+      vx: 0.8 + Math.random() * 0.5 - perpX * 0.5,
+      vy: -0.5 - Math.random() * 0.8,
+      rot: 0,
+      rotSpeed: 0.04 + Math.random() * 0.06,
+      side: 'right',
+      clipW: rightW,
+      fullW: UFO_W,
+      life: 300,
+    });
+    // Sparks at the cut point
+    for (let k = 0; k < 12; k++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 1 + Math.random() * 2.5;
+      flashes.push({
+        x: beamX + (Math.random() - 0.5) * 4,
+        y: u.y + (Math.random() - 0.5) * 6,
+        r: 1 + Math.random() * 1.5,
+        maxLife: 8 + (Math.random() * 8) | 0,
+        life: 8 + (Math.random() * 8) | 0,
+        color: Math.random() < 0.5 ? '#ffe060' : '#ff8030',
+      });
+    }
+    // Health pack drop chance
+    if (Math.random() < 0.6) spawnPack(u.x + (Math.random() - 0.5) * 40);
+  }
+
+  function updateUfoDebris() {
+    for (let i = ufoDebris.length - 1; i >= 0; i--) {
+      const d = ufoDebris[i];
+      d.vy += 0.12;
+      if (d.vy > 3) d.vy = 3;
+      d.x += d.vx;
+      d.y += d.vy;
+      d.rot += d.rotSpeed;
+      d.life--;
+      // Hit terrain or floor — small explosion and remove
+      const gx = Math.floor(d.x), gy = Math.floor(d.y + UFO_H / 2);
+      let hitGround = gy >= H;
+      if (!hitGround && gy >= 0 && gx >= 0 && gx < W) {
+        if (grid[idx(gx, gy)] === 1) hitGround = true;
+      }
+      if (hitGround || d.life <= 0 || d.x < -30 || d.x > W + 30) {
+        if (hitGround) {
+          // Small impact explosion
+          explode(d.x, Math.min(H - 1, d.y + UFO_H / 2), 10, 30, 25, 0.4);
+        }
+        ufoDebris.splice(i, 1);
+        continue;
+      }
+      // Smoke trail
+      if (Math.random() < 0.4) {
+        flashes.push({
+          x: d.x + (Math.random() - 0.5) * 6,
+          y: d.y + (Math.random() - 0.5) * 4,
+          r: 1.5 + Math.random(),
+          maxLife: 14, life: 14,
+          color: 'rgba(40,40,40,0.5)',
+        });
+      }
+    }
+  }
+
+  function renderUfoDebris() {
+    for (const d of ufoDebris) {
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.rot);
+      // Clip to show only the left or right portion of the saucer shape
+      ctx.beginPath();
+      if (d.side === 'left') {
+        ctx.rect(-d.fullW / 2, -UFO_H, d.clipW, UFO_H * 2);
+      } else {
+        ctx.rect(d.fullW / 2 - d.clipW, -UFO_H, d.clipW, UFO_H * 2);
+      }
+      ctx.clip();
+      // Draw the saucer shape (same as renderUfos but centered at 0,0)
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.ellipse(0, 2, d.fullW / 2, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#3a3a3a';
+      ctx.fillRect(Math.floor(-d.fullW / 2 + 1), 1, d.fullW - 2, 1);
+      ctx.fillStyle = '#1d3a55';
+      ctx.beginPath();
+      ctx.arc(0, 1, 5, Math.PI, 0);
+      ctx.fill();
+      // Exposed interior edge — orange glow to sell the cut
+      ctx.fillStyle = '#ff6020';
+      if (d.side === 'left') {
+        ctx.fillRect(d.clipW - d.fullW / 2 - 1, -4, 2, 8);
+      } else {
+        ctx.fillRect(d.fullW / 2 - d.clipW - 1, -4, 2, 8);
+      }
+      ctx.restore();
+    }
+  }
+
   function firePlayerLaser() {
     const x0 = player.x, y0 = player.y - player.h / 2;
     const dx = mouseX - x0, dy = mouseY - y0;
@@ -1524,14 +1663,18 @@
     // Step 1px at a time across the canvas, carving terrain and hitting UFOs.
     const MAX_STEPS = Math.ceil(Math.hypot(W, H));
     let endX = x0, endY = y0;
+    const bisectedThisFire = new Set(); // avoid double-bisecting same UFO
     for (let s = 1; s <= MAX_STEPS; s++) {
       const px = x0 + ux * s;
       const py = y0 + uy * s;
       if (px < 0 || px >= W || py >= H || py < -20) { endX = px; endY = py; break; }
       endX = px; endY = py;
-      // Damage UFOs the beam crosses
+      // Bisect UFOs the beam crosses (dismemberment)
       const u = ufoAt(px, py);
-      if (u) damageUfo(u, u.maxHp);
+      if (u && !bisectedThisFire.has(u)) {
+        bisectedThisFire.add(u);
+        bisectUfo(u, px, py, ux, uy);
+      }
       // Carve terrain along the beam
       if (py >= 0) {
         const gx = Math.floor(px), gy = Math.floor(py);
@@ -2420,6 +2563,7 @@
   }
   function resetWaves() {
     ufos.length = 0;
+    ufoDebris.length = 0;
     waveIndex = 0;
     dayProgress = 0;
     interWaveDelay = 0;
@@ -2427,7 +2571,7 @@
     spawnWave(w.count, w.hpMult);
   }
   function damageUfo(u, dmg) {
-    if (u.state !== 'alive') return;
+    if (u.state !== 'alive' && u.state !== 'entering') return;
     u.hp -= dmg;
     u.hitFlash = 6;
     hits++;
@@ -2437,7 +2581,7 @@
       u.vy = 0.5 + Math.random() * 0.5;
       killCount++;
       hitStopFrames = Math.max(hitStopFrames, 2);
-      if (nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
+      if (!DEBUG && nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
         spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
         nextDropIndex++;
       }
@@ -2477,7 +2621,7 @@
         u.vy = 0.5 + Math.random() * 0.5;
         killCount++;
         hitStopFrames = Math.max(hitStopFrames, 2);
-        if (nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
+        if (!DEBUG && nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
           spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
           nextDropIndex++;
         }
@@ -2485,9 +2629,9 @@
     }
   }
   function ufoAt(x, y) {
-    // Returns the first alive UFO whose bounds contain (x,y), or null.
+    // Returns the first alive/entering UFO whose bounds contain (x,y), or null.
     for (const u of ufos) {
-      if (u.state !== 'alive') continue;
+      if (u.state !== 'alive' && u.state !== 'entering') continue;
       if (Math.abs(x - u.x) <= UFO_W / 2 && Math.abs(y - u.y) <= UFO_H / 2 + 1) return u;
     }
     return null;
@@ -2670,8 +2814,8 @@
         ctx.fillStyle = cols[(tt + i) % cols.length];
         ctx.fillRect(Math.floor(x + dx), lightYs, 1, 1);
       });
-      // HP bar — only while alive
-      if (u.state === 'alive') {
+      // HP bar — while alive or entering
+      if (u.state === 'alive' || u.state === 'entering') {
         const hpW = UFO_W;
         const hpx = Math.floor(x - hpW / 2);
         const hpy = Math.floor(y - 8);
@@ -2795,6 +2939,7 @@
       updateRockets();
       updateGrenades();
       updateUfos();
+      updateUfoDebris();
       updateLasers();
       for (let i = playerBeams.length - 1; i >= 0; i--) {
         if (--playerBeams[i].life <= 0) playerBeams.splice(i, 1);
