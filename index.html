@@ -1262,8 +1262,11 @@
   let weaponLabelText = '';
   function switchWeapon(name) {
     if (!WEAPONS[name] || weapon === name || !unlockedWeapons.has(name)) return;
+    // Save current weapon's cooldown
+    weaponCooldowns[weapon] = fireCooldown;
     weapon = name;
-    fireCooldown = 0;
+    // Restore the new weapon's cooldown (0 if never set)
+    fireCooldown = weaponCooldowns[name] || 0;
     weaponLabelText = WEAPONS[name].name;
     weaponLabelTime = 90; // ~1.5s visible before fading
     updateWeaponHud();
@@ -1384,6 +1387,7 @@
   }, { passive: false });
   let firingHeld = false;
   let fireCooldown = 0;
+  const weaponCooldowns = {}; // per-weapon cooldown tracking
   let slowmoHeld = false;
   // Bullet-time meter: 10s of use, 5s to recharge from empty.
   const SLOWMO_MAX_MS = 10000;
@@ -2928,6 +2932,10 @@
       } else {
         if (fireCooldown > 0) fireCooldown--;
         fireShakeRamp = Math.max(0, fireShakeRamp - 2);
+      }
+      // Tick down cooldowns for inactive weapons in the background
+      for (const k in weaponCooldowns) {
+        if (k !== weapon && weaponCooldowns[k] > 0) weaponCooldowns[k]--;
       }
       windT++;
       updateClouds();
