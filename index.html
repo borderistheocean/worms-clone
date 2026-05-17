@@ -636,6 +636,7 @@
     // UFOs + lasers (above clouds/terrain, below player projectiles)
     renderUfos();
     renderUfoDebris();
+    renderHullDebris();
     renderLasers();
     renderPacks();
 
@@ -1898,6 +1899,39 @@
     shakeTrauma = Math.max(0, shakeTrauma - 0.06);
   }
 
+  // Hull debris — small chunks that fall off UFOs when hit by bullets
+  const hullDebris = [];
+  function spawnHullChunk(x, y, vx, vy) {
+    hullDebris.push({
+      x, y,
+      vx: vx + (Math.random() - 0.5) * 0.6,
+      vy: vy + Math.random() * 0.3,
+      size: 1 + Math.floor(Math.random() * 2), // 1 or 2 px
+      life: 60 + ((Math.random() * 40) | 0),
+      color: Math.random() < 0.4 ? '#3a3a3a' : Math.random() < 0.7 ? '#222' : '#1d3a55',
+    });
+  }
+  function updateHullDebris() {
+    for (let i = hullDebris.length - 1; i >= 0; i--) {
+      const d = hullDebris[i];
+      d.vy += 0.15;
+      if (d.vy > 4) d.vy = 4;
+      d.x += d.vx;
+      d.y += d.vy;
+      d.life--;
+      // Remove if off-screen or expired
+      if (d.life <= 0 || d.y > H || d.x < 0 || d.x > W) {
+        hullDebris.splice(i, 1);
+      }
+    }
+  }
+  function renderHullDebris() {
+    for (const d of hullDebris) {
+      ctx.fillStyle = d.color;
+      ctx.fillRect(Math.floor(d.x), Math.floor(d.y), d.size, d.size);
+    }
+  }
+
   // Blood pixels — single-pixel particles that arc out and stick on landing
   const bloods = [];
   function updateBloods() {
@@ -2015,7 +2049,16 @@
         r.y += r.vy / steps;
         const gx = Math.floor(r.x), gy = Math.floor(r.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
-        { const u = ufoAt(r.x, r.y); if (u) { damageUfo(u, Math.ceil(u.maxHp * 0.8)); hit = true; break; } }
+        { const u = ufoAt(r.x, r.y); if (u) {
+          // Big bite mark from rocket impact
+          const biteR = 2.0 + Math.random() * 1.5;
+          u.bites.push({ lx: r.x - u.x, ly: r.y - u.y, r: biteR });
+          // Falling hull chunks — more and bigger than bullet hits
+          for (let k = 0; k < 4 + Math.floor(Math.random() * 3); k++) {
+            spawnHullChunk(r.x, r.y, (Math.random() - 0.5) * 2.0, 0.3 + Math.random() * 1.2);
+          }
+          damageUfo(u, Math.ceil(u.maxHp * 0.8)); hit = true; break;
+        } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
       }
       r.life--;
@@ -2098,7 +2141,29 @@
         b.y += b.vy / steps;
         const gx = Math.floor(b.x), gy = Math.floor(b.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
-        { const u = ufoAt(b.x, b.y); if (u) { damageUfo(u, 1); hit = true; break; } }
+        { const u = ufoAt(b.x, b.y); if (u) {
+          // Record a bite mark at the impact point (local to UFO centre)
+          const biteR = 1.0 + Math.random() * 1.0;
+          u.bites.push({ lx: b.x - u.x, ly: b.y - u.y, r: biteR });
+          // Spawn falling hull chunks
+          const chunkCount = 1 + Math.floor(Math.random() * 3);
+          for (let k = 0; k < chunkCount; k++) {
+            spawnHullChunk(b.x, b.y, (Math.random() - 0.5) * 1.2, 0.5 + Math.random() * 0.8);
+          }
+          // Spark debris from the chunk being torn off
+          for (let k = 0; k < 3; k++) {
+            const ang = Math.atan2(b.vy, b.vx) + (Math.random() - 0.5) * 1.8;
+            flashes.push({
+              x: b.x + (Math.random() - 0.5) * 2,
+              y: b.y + (Math.random() - 0.5) * 2,
+              r: 0.8 + Math.random(),
+              maxLife: 6 + ((Math.random() * 6) | 0),
+              life: 6 + ((Math.random() * 6) | 0),
+              color: Math.random() < 0.5 ? '#888' : '#555',
+            });
+          }
+          damageUfo(u, 1); hit = true; break;
+        } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           if (b.kind === 'build') {
             fillCircle(gx, gy, 4);
@@ -2642,6 +2707,7 @@
         hitFlash: 0,
         state: 'entering',     // 'entering' | 'alive' | 'falling'
         vy: 0,
+        bites: [],             // bullet impact craters (local coords {lx, ly, r})
       });
     }
   }
@@ -2788,6 +2854,42 @@
       if (u.x < 12) { u.x = 12; u.vx = Math.abs(u.vx); }
       if (u.x > W - 12) { u.x = W - 12; u.vx = -Math.abs(u.vx); }
       u.y = u.baseY + Math.sin(u.bob) * 6;
+      // Damage effects: smoke at ≤50% HP, fire at ≤30% HP
+      const hpFrac = u.hp / u.maxHp;
+      if (hpFrac <= 0.3) {
+        // Fire — orange/yellow flickering flames rising from the hull
+        if (Math.random() < 0.5) {
+          flashes.push({
+            x: u.x + (Math.random() - 0.5) * UFO_W * 0.6,
+            y: u.y + (Math.random() - 0.5) * 4,
+            r: 1.5 + Math.random() * 1.5,
+            maxLife: 10 + ((Math.random() * 6) | 0),
+            life: 10 + ((Math.random() * 6) | 0),
+            color: Math.random() < 0.5 ? '#ff6020' : '#ffd040',
+          });
+        }
+        // Still some smoke mixed in
+        if (Math.random() < 0.25) {
+          flashes.push({
+            x: u.x + (Math.random() - 0.5) * UFO_W * 0.5,
+            y: u.y - 2 + Math.random() * 3,
+            r: 1.5 + Math.random() * 1.5,
+            maxLife: 18, life: 18,
+            color: 'rgba(30,30,30,0.6)',
+          });
+        }
+      } else if (hpFrac <= 0.5) {
+        // Smoke — dark wisps rising from the ship
+        if (Math.random() < 0.3) {
+          flashes.push({
+            x: u.x + (Math.random() - 0.5) * UFO_W * 0.5,
+            y: u.y - 2 + Math.random() * 3,
+            r: 1.5 + Math.random() * 1.5,
+            maxLife: 20, life: 20,
+            color: 'rgba(40,40,40,0.5)',
+          });
+        }
+      }
       // Shoot at player periodically
       if (!player.dead) {
         u.cooldown--;
@@ -2854,6 +2956,12 @@
       if (dead || L.life <= 0) lasers.splice(i, 1);
     }
   }
+  // Offscreen buffer for UFO rendering (allows proper bite cutouts)
+  const ufoBuffer = document.createElement('canvas');
+  ufoBuffer.width = UFO_W + 4;
+  ufoBuffer.height = UFO_H + 12;
+  const ubctx = ufoBuffer.getContext('2d');
+
   function renderUfos() {
     for (const u of ufos) {
       ctx.save();
@@ -2874,30 +2982,74 @@
         }
       }
       const x = u.x, y = u.y;
-      // Saucer base — dark slab so it reads well against the sky
-      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#222';
-      ctx.beginPath();
-      ctx.ellipse(x, y + 2, UFO_W / 2, 3, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Underbelly stripe (slightly lighter rim)
-      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3a3a3a';
-      ctx.fillRect(Math.floor(x - UFO_W / 2 + 1), Math.floor(y + 1), UFO_W - 2, 1);
-      // Dome — dark teal so it pops against blue sky without glowing
-      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#1d3a55';
-      ctx.beginPath();
-      ctx.arc(x, y + 1, 5, Math.PI, 0);
-      ctx.fill();
-      // Dome highlight
-      ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3b6f9c';
-      ctx.fillRect(Math.floor(x - 2), Math.floor(y - 3), 1, 1);
-      // Underside lights
-      const tt = (windT * 0.15) | 0;
-      const cols = ['#ffe040', '#ff4060', '#40e0ff'];
-      const lightYs = Math.floor(y + 4);
-      [-7, -2, 3, 8].forEach((dx, i) => {
-        ctx.fillStyle = cols[(tt + i) % cols.length];
-        ctx.fillRect(Math.floor(x + dx), lightYs, 1, 1);
-      });
+      const hasBites = u.bites && u.bites.length > 0;
+
+      if (hasBites) {
+        // Draw UFO body onto offscreen buffer, then punch out bites
+        const bw = ufoBuffer.width, bh = ufoBuffer.height;
+        // Centre of the buffer in local coords
+        const cx = bw / 2, cy = bh / 2;
+        ubctx.clearRect(0, 0, bw, bh);
+
+        // Saucer base
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#222';
+        ubctx.beginPath();
+        ubctx.ellipse(cx, cy + 2, UFO_W / 2, 3, 0, 0, Math.PI * 2);
+        ubctx.fill();
+        // Underbelly stripe
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3a3a3a';
+        ubctx.fillRect(Math.floor(cx - UFO_W / 2 + 1), Math.floor(cy + 1), UFO_W - 2, 1);
+        // Dome
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#1d3a55';
+        ubctx.beginPath();
+        ubctx.arc(cx, cy + 1, 5, Math.PI, 0);
+        ubctx.fill();
+        // Dome highlight
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3b6f9c';
+        ubctx.fillRect(Math.floor(cx - 2), Math.floor(cy - 3), 1, 1);
+        // Underside lights
+        const tt = (windT * 0.15) | 0;
+        const cols = ['#ffe040', '#ff4060', '#40e0ff'];
+        const lightYs = Math.floor(cy + 4);
+        [-7, -2, 3, 8].forEach((dx, i) => {
+          ubctx.fillStyle = cols[(tt + i) % cols.length];
+          ubctx.fillRect(Math.floor(cx + dx), lightYs, 1, 1);
+        });
+
+        // Punch out bite marks
+        ubctx.globalCompositeOperation = 'destination-out';
+        for (const bite of u.bites) {
+          ubctx.beginPath();
+          ubctx.arc(cx + bite.lx, cy + bite.ly, bite.r, 0, Math.PI * 2);
+          ubctx.fill();
+        }
+        ubctx.globalCompositeOperation = 'source-over';
+
+        // Stamp the buffer onto the main canvas
+        ctx.drawImage(ufoBuffer, x - bw / 2, y - bh / 2);
+      } else {
+        // No bites — draw directly (faster path)
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#222';
+        ctx.beginPath();
+        ctx.ellipse(x, y + 2, UFO_W / 2, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3a3a3a';
+        ctx.fillRect(Math.floor(x - UFO_W / 2 + 1), Math.floor(y + 1), UFO_W - 2, 1);
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#1d3a55';
+        ctx.beginPath();
+        ctx.arc(x, y + 1, 5, Math.PI, 0);
+        ctx.fill();
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3b6f9c';
+        ctx.fillRect(Math.floor(x - 2), Math.floor(y - 3), 1, 1);
+        const tt = (windT * 0.15) | 0;
+        const cols = ['#ffe040', '#ff4060', '#40e0ff'];
+        const lightYs = Math.floor(y + 4);
+        [-7, -2, 3, 8].forEach((dx, i) => {
+          ctx.fillStyle = cols[(tt + i) % cols.length];
+          ctx.fillRect(Math.floor(x + dx), lightYs, 1, 1);
+        });
+      }
+
       // HP bar — while alive or entering
       if (u.state === 'alive' || u.state === 'entering') {
         const hpW = UFO_W;
@@ -3028,6 +3180,7 @@
       updateGrenades();
       updateUfos();
       updateUfoDebris();
+      updateHullDebris();
       updateLasers();
       for (let i = playerBeams.length - 1; i >= 0; i--) {
         if (--playerBeams[i].life <= 0) playerBeams.splice(i, 1);
