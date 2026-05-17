@@ -714,6 +714,9 @@
       ctx.fillRect(Math.floor(g.x) - 1, Math.floor(g.y) - 1, 3, 3);
     }
 
+    // Physics balls
+    renderPhysBalls();
+
     // Player
     if (player.dead) {
       // Lying on side: swap width/height, head at facing end
@@ -1970,6 +1973,7 @@
     flashes.push({ x, y, r: craterR * 0.65, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
     flashes.push({ x, y, r: craterR * 0.82, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
     addShake(shake);
+    explodeAffectBalls(x, y, blastR);
     const pcx = player.x, pcy = player.y - player.h / 2;
     const ddx = pcx - x, ddy = pcy - y;
     const dist = Math.hypot(ddx, ddy);
@@ -2057,7 +2061,11 @@
           for (let k = 0; k < 4 + Math.floor(Math.random() * 3); k++) {
             spawnHullChunk(r.x, r.y, (Math.random() - 0.5) * 2.0, 0.3 + Math.random() * 1.2);
           }
-          damageUfo(u, Math.ceil(u.maxHp * 0.8)); hit = true; break;
+          // Shunt the ship in the rocket's direction of travel
+          const rsp = Math.hypot(r.vx, r.vy) || 1;
+          const shuntX = (r.vx / rsp) * 1.8;
+          const shuntY = (r.vy / rsp) * 0.8;
+          damageUfo(u, Math.ceil(u.maxHp * 0.8), shuntX, shuntY); hit = true; break;
         } }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
       }
@@ -2130,6 +2138,203 @@
     }
   }
 
+  // Physics balls — rigid body circles that interact with terrain, explosions, and each other
+  const physBalls = [];
+  const PHYS_GRAVITY = 0.18;
+  const PHYS_RESTITUTION = 0.55;  // bounciness
+  const PHYS_FRICTION = 0.985;    // air drag
+  const PHYS_GROUND_FRICTION = 0.88;
+
+  function spawnBall(x, y, r, vx, vy) {
+    physBalls.push({
+      x, y, r: r || 4,
+      vx: vx || 0, vy: vy || 0,
+      angle: 0,
+      angVel: 0,
+      mass: r ? r * r : 16, // proportional to area
+    });
+  }
+
+  function ballTerrainCollide(ball) {
+    // Sample points around the circumference to find terrain penetration
+    const samples = 12;
+    let pushX = 0, pushY = 0, contacts = 0;
+    for (let i = 0; i < samples; i++) {
+      const ang = (i / samples) * Math.PI * 2;
+      const sx = Math.floor(ball.x + Math.cos(ang) * ball.r);
+      const sy = Math.floor(ball.y + Math.sin(ang) * ball.r);
+      if (sx < 0 || sx >= W) { pushX -= Math.cos(ang); contacts++; continue; }
+      if (sy >= H) { pushY -= Math.sin(ang); contacts++; continue; }
+      if (sy >= 0 && grid[idx(sx, sy)] === 1) {
+        pushX -= Math.cos(ang);
+        pushY -= Math.sin(ang);
+        contacts++;
+      }
+    }
+    if (contacts === 0) return null;
+    const len = Math.hypot(pushX, pushY) || 1;
+    return { nx: pushX / len, ny: pushY / len, contacts };
+  }
+
+  function updatePhysBalls() {
+    for (const ball of physBalls) {
+      // Gravity
+      ball.vy += PHYS_GRAVITY;
+
+      // Air drag
+      ball.vx *= PHYS_FRICTION;
+      ball.vy *= PHYS_FRICTION;
+
+      // Sub-step movement
+      const speed = Math.hypot(ball.vx, ball.vy);
+      const steps = Math.max(1, Math.ceil(speed / (ball.r * 0.5)));
+      for (let s = 0; s < steps; s++) {
+        ball.x += ball.vx / steps;
+        ball.y += ball.vy / steps;
+
+        const col = ballTerrainCollide(ball);
+        if (col) {
+          // Push out of terrain
+          ball.x += col.nx * 0.8;
+          ball.y += col.ny * 0.8;
+
+          // Reflect velocity along the surface normal
+          const vDotN = ball.vx * col.nx + ball.vy * col.ny;
+          if (vDotN < 0) {
+            ball.vx -= (1 + PHYS_RESTITUTION) * vDotN * col.nx;
+            ball.vy -= (1 + PHYS_RESTITUTION) * vDotN * col.ny;
+
+            // Ground friction — reduce tangential velocity
+            const tx = -col.ny, ty = col.nx;
+            const vDotT = ball.vx * tx + ball.vy * ty;
+            ball.vx -= vDotT * (1 - PHYS_GROUND_FRICTION) * tx;
+            ball.vy -= vDotT * (1 - PHYS_GROUND_FRICTION) * ty;
+
+            // Rolling: angular velocity from tangential contact
+            ball.angVel = vDotT / ball.r * 0.3;
+          }
+        }
+      }
+
+      // Update rotation
+      ball.angle += ball.angVel;
+      ball.angVel *= 0.98; // angular drag
+
+      // Clamp to world
+      if (ball.x < ball.r) { ball.x = ball.r; ball.vx = Math.abs(ball.vx) * PHYS_RESTITUTION; }
+      if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx) * PHYS_RESTITUTION; }
+      if (ball.y > H + 50) { ball.y = -10; ball.vy = 0; } // wrap if falls out
+    }
+
+    // Ball-to-ball collisions
+    for (let i = 0; i < physBalls.length; i++) {
+      for (let j = i + 1; j < physBalls.length; j++) {
+        const a = physBalls[i], b = physBalls[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = a.r + b.r;
+        if (dist < minDist && dist > 0.01) {
+          // Separate
+          const overlap = minDist - dist;
+          const nx = dx / dist, ny = dy / dist;
+          const totalMass = a.mass + b.mass;
+          a.x -= nx * overlap * (b.mass / totalMass);
+          a.y -= ny * overlap * (b.mass / totalMass);
+          b.x += nx * overlap * (a.mass / totalMass);
+          b.y += ny * overlap * (a.mass / totalMass);
+
+          // Impulse-based velocity exchange
+          const relVx = a.vx - b.vx, relVy = a.vy - b.vy;
+          const relVdotN = relVx * nx + relVy * ny;
+          if (relVdotN > 0) {
+            const impulse = (relVdotN * (1 + PHYS_RESTITUTION)) / totalMass;
+            a.vx -= impulse * b.mass * nx;
+            a.vy -= impulse * b.mass * ny;
+            b.vx += impulse * a.mass * nx;
+            b.vy += impulse * a.mass * ny;
+            // Transfer angular velocity on off-centre hits
+            const crossA = (b.x - a.x) * ny - (b.y - a.y) * nx;
+            const crossB = (a.x - b.x) * ny - (a.y - b.y) * nx;
+            a.angVel += crossA * impulse * 0.1;
+            b.angVel += crossB * impulse * 0.1;
+          }
+        }
+      }
+    }
+
+    // Ball-to-player collision
+    if (!player.dead) {
+      const pcx = player.x, pcy = player.y - player.h / 2;
+      for (const ball of physBalls) {
+        const dx = ball.x - pcx, dy = ball.y - pcy;
+        const dist = Math.hypot(dx, dy);
+        const minDist = ball.r + player.w / 2;
+        if (dist < minDist && dist > 0.01) {
+          const nx = dx / dist, ny = dy / dist;
+          const overlap = minDist - dist;
+          ball.x += nx * overlap * 0.7;
+          ball.y += ny * overlap * 0.7;
+          // Bounce off player
+          const vDotN = ball.vx * nx + ball.vy * ny;
+          if (vDotN < 0) {
+            ball.vx -= (1 + 0.4) * vDotN * nx;
+            ball.vy -= (1 + 0.4) * vDotN * ny;
+          }
+          // Push player slightly
+          player.vx -= nx * 0.3;
+        }
+      }
+    }
+  }
+
+  // Explosions affect physics balls
+  function explodeAffectBalls(ex, ey, blastR) {
+    for (const ball of physBalls) {
+      const dx = ball.x - ex, dy = ball.y - ey;
+      const dist = Math.hypot(dx, dy);
+      if (dist < blastR && dist > 0.01) {
+        const intensity = 1 - dist / blastR;
+        const force = 4 + intensity * 6;
+        const nx = dx / dist, ny = dy / dist;
+        ball.vx += nx * force;
+        ball.vy += ny * force - 2 * intensity;
+        ball.angVel += (Math.random() - 0.5) * intensity * 0.5;
+      }
+    }
+  }
+
+  function renderPhysBalls() {
+    for (const ball of physBalls) {
+      ctx.save();
+      ctx.translate(ball.x, ball.y);
+      ctx.rotate(ball.angle);
+      // Outer ring
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, ball.r, 0, Math.PI * 2);
+      ctx.stroke();
+      // Fill
+      ctx.fillStyle = '#c04040';
+      ctx.beginPath();
+      ctx.arc(0, 0, ball.r, 0, Math.PI * 2);
+      ctx.fill();
+      // Rotation indicator — a stripe so you can see it spin
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-ball.r * 0.6, 0);
+      ctx.lineTo(ball.r * 0.6, 0);
+      ctx.stroke();
+      // Highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.beginPath();
+      ctx.arc(-ball.r * 0.3, -ball.r * 0.3, ball.r * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   function updateBullets() {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
@@ -2141,6 +2346,20 @@
         b.y += b.vy / steps;
         const gx = Math.floor(b.x), gy = Math.floor(b.y);
         if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        // Bullet hits physics ball — knock it
+        { let ballHit = false;
+          for (const ball of physBalls) {
+            const dx = b.x - ball.x, dy = b.y - ball.y;
+            if (Math.hypot(dx, dy) < ball.r) {
+              const sp = Math.hypot(b.vx, b.vy) || 1;
+              ball.vx += (b.vx / sp) * 1.5;
+              ball.vy += (b.vy / sp) * 1.5;
+              ball.angVel += (Math.random() - 0.5) * 0.3;
+              ballHit = true; break;
+            }
+          }
+          if (ballHit) { hit = true; break; }
+        }
         { const u = ufoAt(b.x, b.y); if (u) {
           // Record a bite mark at the impact point (local to UFO centre)
           const biteR = 1.0 + Math.random() * 1.0;
@@ -2720,7 +2939,7 @@
     const w = waveSpec(0);
     spawnWave(w.count, w.hpMult);
   }
-  function damageUfo(u, dmg) {
+  function damageUfo(u, dmg, shuntVx, shuntVy) {
     if (u.state !== 'alive' && u.state !== 'entering') return;
     u.hp -= dmg;
     u.hitFlash = 6;
@@ -2729,6 +2948,17 @@
       u.hp = 0;
       u.state = 'falling';
       u.vy = 0.5 + Math.random() * 0.5;
+      u.spinAngle = 0;
+      // Apply shunt from the killing blow's direction
+      if (shuntVx !== undefined) {
+        u.vx = shuntVx;
+        // Spin in the direction of the shunt (positive vx = clockwise)
+        u.spinSpeed = shuntVx * 0.06 + (Math.random() - 0.5) * 0.02;
+      } else {
+        // Default: gentle spin based on existing drift
+        u.spinSpeed = u.vx * 0.04 + (Math.random() - 0.5) * 0.02;
+      }
+      if (shuntVy !== undefined) u.vy += shuntVy;
       killCount++;
       hitStopFrames = Math.max(hitStopFrames, 2);
       if (!DEBUG && nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
@@ -2821,6 +3051,8 @@
         if (u.vy > 1.6) u.vy = 1.6;
         u.y += u.vy;
         u.x += u.vx * 0.4; // drifts as it falls
+        // Accumulate spin
+        if (u.spinAngle !== undefined) u.spinAngle += u.spinSpeed;
         // Sample several columns across the saucer's belly so a wide hull
         // still detects ground contact even if u.x is over a small gap.
         const belly = u.y + UFO_H / 2;
@@ -2968,7 +3200,7 @@
       // Falling ones tumble and trail smoke
       if (u.state === 'falling') {
         ctx.translate(u.x, u.y);
-        ctx.rotate(Math.sin(u.y * 0.1) * 0.6);
+        ctx.rotate(u.spinAngle !== undefined ? u.spinAngle : Math.sin(u.y * 0.1) * 0.6);
         ctx.translate(-u.x, -u.y);
         // Smoke puffs trailing upward as it falls
         if ((Math.random() < 0.6)) {
@@ -3134,6 +3366,14 @@
   spawnCavePacks(initCaves);
   resetWaves();
 
+  // Spawn physics balls and truck only in debug mode
+  if (DEBUG) {
+    for (let i = 0; i < 5; i++) {
+      const bx = 40 + Math.random() * (W - 80);
+      spawnBall(bx, 10 + Math.random() * 20, 3 + Math.floor(Math.random() * 3), (Math.random() - 0.5) * 2, 0);
+    }
+  }
+
   const TARGET_FPS = 60;
   const TICK_MS = 1000 / TARGET_FPS;
   const TIME_SCALE = 0.6;
@@ -3178,6 +3418,7 @@
       updateBullets();
       updateRockets();
       updateGrenades();
+      updatePhysBalls();
       updateUfos();
       updateUfoDebris();
       updateHullDebris();
