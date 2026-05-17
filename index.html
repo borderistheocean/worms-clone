@@ -2441,6 +2441,47 @@
         spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
         nextDropIndex++;
       }
+      // Death explosion: shunt nearby enemy ships and deal 15% of their max HP
+      ufoDeathExplosion(u);
+    }
+  }
+
+  const UFO_DEATH_BLAST_RADIUS = 60; // how far the death explosion reaches
+  function ufoDeathExplosion(dead) {
+    // Visual: small flash at the dying ship's position
+    flashes.push({ x: dead.x, y: dead.y, r: 12, maxLife: 10, life: 10, color: '#ffcc44', explosion: true });
+    flashes.push({ x: dead.x, y: dead.y, r: 16, maxLife: 14, life: 14, color: '#ff6622', explosion: true });
+    addShake(0.3);
+    // Affect nearby alive UFOs
+    for (const u of ufos) {
+      if (u === dead || u.state !== 'alive') continue;
+      const dx = u.x - dead.x;
+      const dy = u.y - dead.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= UFO_DEATH_BLAST_RADIUS) continue;
+      // Deal 15% of the target's max HP as damage
+      const splashDmg = Math.ceil(u.maxHp * 0.15);
+      u.hp -= splashDmg;
+      u.hitFlash = 6;
+      // Shunt away from the explosion
+      const knock = dist || 1;
+      const intensity = 1 - dist / UFO_DEATH_BLAST_RADIUS;
+      u.vx += (dx / knock) * (1.5 + intensity * 2.0);
+      u.baseY += (dy / knock) * (8 + intensity * 12);
+      // Clamp baseY so ships don't fly off-screen
+      u.baseY = Math.max(10, Math.min(H * 0.6, u.baseY));
+      // If splash damage kills this ship too, trigger its own death
+      if (u.hp <= 0) {
+        u.hp = 0;
+        u.state = 'falling';
+        u.vy = 0.5 + Math.random() * 0.5;
+        killCount++;
+        hitStopFrames = Math.max(hitStopFrames, 2);
+        if (nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
+          spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
+          nextDropIndex++;
+        }
+      }
     }
   }
   function ufoAt(x, y) {
