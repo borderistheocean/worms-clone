@@ -1018,15 +1018,95 @@
       ctx.textBaseline = 'alphabetic';
     }
 
-    // Slow-mo screen filter — a cool blue tint with vignette at the edges
+    // Slow-mo screen filter — green sci-fi HUD when guiding a rocket, blue otherwise
     if (slowmoActive()) {
-      ctx.fillStyle = 'rgba(80,140,220,0.18)';
-      ctx.fillRect(0, 0, W, H);
-      const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
-      vg.addColorStop(0, 'rgba(0,0,40,0)');
-      vg.addColorStop(1, 'rgba(0,0,40,0.45)');
-      ctx.fillStyle = vg;
-      ctx.fillRect(0, 0, W, H);
+      const guiding = guidedRocket !== null;
+      if (guiding) {
+        // Green sci-fi tint
+        ctx.fillStyle = 'rgba(20,180,40,0.12)';
+        ctx.fillRect(0, 0, W, H);
+        const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
+        vg.addColorStop(0, 'rgba(0,40,0,0)');
+        vg.addColorStop(1, 'rgba(0,40,0,0.5)');
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, W, H);
+
+        // Flashing alpha for all targeting boxes (fast pulse)
+        const flashAlpha = 0.4 + 0.6 * Math.sin(windT * 0.5);
+
+        // Helper: draw a box made of 4 separate lines with gaps at the corners
+        function drawTargetBox(cx, cy, hw, hh, gap) {
+          // Top edge (inset from corners by gap)
+          ctx.beginPath();
+          ctx.moveTo(cx - hw + gap, cy - hh);
+          ctx.lineTo(cx + hw - gap, cy - hh);
+          ctx.stroke();
+          // Bottom edge
+          ctx.beginPath();
+          ctx.moveTo(cx - hw + gap, cy + hh);
+          ctx.lineTo(cx + hw - gap, cy + hh);
+          ctx.stroke();
+          // Left edge
+          ctx.beginPath();
+          ctx.moveTo(cx - hw, cy - hh + gap);
+          ctx.lineTo(cx - hw, cy + hh - gap);
+          ctx.stroke();
+          // Right edge
+          ctx.beginPath();
+          ctx.moveTo(cx + hw, cy - hh + gap);
+          ctx.lineTo(cx + hw, cy + hh - gap);
+          ctx.stroke();
+        }
+
+        // Red box centred on the guided rocket
+        ctx.globalAlpha = flashAlpha;
+        ctx.strokeStyle = '#ff2020';
+        ctx.lineWidth = 1;
+        drawTargetBox(guidedRocket.x, guidedRocket.y, 7, 7, 3);
+        ctx.globalAlpha = 1;
+
+        // Yellow boxes around enemy laser bolts
+        for (const L of lasers) {
+          ctx.globalAlpha = flashAlpha;
+          ctx.strokeStyle = '#ffe030';
+          ctx.lineWidth = 1;
+          drawTargetBox(L.x, L.y, 4, 4, 2);
+          ctx.globalAlpha = 1;
+        }
+
+        // White targeting boxes around UFOs with distance readout
+        ctx.font = '5px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        for (const u of ufos) {
+          if (u.state === 'falling') continue;
+          const hw = (UFO_W + 4) / 2, hh = (UFO_H + 4) / 2;
+          ctx.globalAlpha = flashAlpha;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          drawTargetBox(u.x, u.y, hw, hh, 3);
+          ctx.globalAlpha = 1;
+          // Distance from rocket to this UFO
+          const dist = Math.floor(Math.hypot(u.x - guidedRocket.x, u.y - guidedRocket.y));
+          const tx = Math.floor(u.x);
+          const ty = Math.floor(u.y + hh) + 2;
+          ctx.fillStyle = '#000';
+          ctx.fillText(dist + 'm', tx + 1, ty + 1);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(dist + 'm', tx, ty);
+        }
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
+      } else {
+        // Standard blue slow-mo filter
+        ctx.fillStyle = 'rgba(80,140,220,0.18)';
+        ctx.fillRect(0, 0, W, H);
+        const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
+        vg.addColorStop(0, 'rgba(0,0,40,0)');
+        vg.addColorStop(1, 'rgba(0,0,40,0.45)');
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, W, H);
+      }
     }
 
     // Bullet-time meter — bottom-centre. Only visible when charging or when
