@@ -28,20 +28,22 @@
 <script>
 (() => {
   const W = 480, H = 270;
+  const WORLD_W = 960; // total world width (twice viewport)
+  let cameraX = 0; // horizontal scroll offset; left edge of viewport in world coords
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
 
   // Terrain grid: 1 = solid, 0 = empty
-  let grid = new Uint8Array(W * H);
-  // Offscreen image for terrain rendering
+  let grid = new Uint8Array(WORLD_W * H);
+  // Offscreen image for terrain rendering (sized to whole world)
   const terrainCanvas = document.createElement('canvas');
-  terrainCanvas.width = W; terrainCanvas.height = H;
+  terrainCanvas.width = WORLD_W; terrainCanvas.height = H;
   const tctx = terrainCanvas.getContext('2d');
-  const terrainImg = tctx.createImageData(W, H);
+  const terrainImg = tctx.createImageData(WORLD_W, H);
   let terrainDirty = true;
   // Offscreen FX canvas — used to mask explosion flashes to terrain shape
   const fxCanvas = document.createElement('canvas');
-  fxCanvas.width = W; fxCanvas.height = H;
+  fxCanvas.width = WORLD_W; fxCanvas.height = H;
   const fxctx = fxCanvas.getContext('2d');
 
   // Colors
@@ -51,10 +53,10 @@
   const COL_GRASS_DK = [40, 110, 40, 255];
   const COL_SKY      = [0, 0, 0, 0]; // transparent so canvas bg shows
 
-  function idx(x, y) { return y * W + x; }
-  function inBounds(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
+  function idx(x, y) { return y * WORLD_W + x; }
+  function inBounds(x, y) { return x >= 0 && x < WORLD_W && y >= 0 && y < H; }
   function solid(x, y) {
-    if (x < 0 || x >= W) return true; // walls
+    if (x < 0 || x >= WORLD_W) return true; // walls
     if (y >= H) return true;          // floor
     if (y < 0) return false;          // sky
     return grid[idx(x, y)] === 1;
@@ -67,7 +69,7 @@
     const seedA = Math.random() * 1000;
     const seedB = Math.random() * 1000;
     const seedC = Math.random() * 1000;
-    for (let x = 0; x < W; x++) {
+    for (let x = 0; x < WORLD_W; x++) {
       const h = baseY
         + Math.sin((x + seedA) * 0.012) * 40
         + Math.sin((x + seedB) * 0.035) * 15
@@ -78,7 +80,7 @@
     // Carve some random caves so destruction has interesting interior
     const caves = [];
     for (let i = 0; i < 6; i++) {
-      const cx = 60 + Math.random() * (W - 120);
+      const cx = 60 + Math.random() * (WORLD_W - 120);
       const cy = baseY + 20 + Math.random() * 60;
       const r  = 12 + Math.random() * 20;
       carveCircle(cx, cy, r, false);
@@ -91,7 +93,7 @@
   function carveCircle(cx, cy, r, runIsolation = true) {
     const r2 = r * r;
     const x0 = Math.max(0, Math.floor(cx - r));
-    const x1 = Math.min(W - 1, Math.ceil(cx + r));
+    const x1 = Math.min(WORLD_W - 1, Math.ceil(cx + r));
     const y0 = Math.max(0, Math.floor(cy - r));
     const y1 = Math.min(H - 1, Math.ceil(cy + r));
     for (let y = y0; y <= y1; y++) {
@@ -111,9 +113,9 @@
 
   function detachFloatingChunks() {
     // Flood-fill from bottom row across all solid pixels
-    const visited = new Uint8Array(W * H);
+    const visited = new Uint8Array(WORLD_W * H);
     const stack = [];
-    for (let x = 0; x < W; x++) {
+    for (let x = 0; x < WORLD_W; x++) {
       const i = idx(x, H - 1);
       if (grid[i] === 1) { visited[i] = 1; stack.push(x, H - 1); }
     }
@@ -125,7 +127,7 @@
         const i = idx(x-1, y);
         if (!visited[i] && grid[i] === 1) { visited[i] = 1; stack.push(x-1, y); }
       }
-      if (x < W-1) {
+      if (x < WORLD_W-1) {
         const i = idx(x+1, y);
         if (!visited[i] && grid[i] === 1) { visited[i] = 1; stack.push(x+1, y); }
       }
@@ -139,9 +141,9 @@
       }
     }
     // Group unvisited solid pixels into connected components
-    const claimed = new Uint8Array(W * H);
+    const claimed = new Uint8Array(WORLD_W * H);
     for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
+      for (let x = 0; x < WORLD_W; x++) {
         const i = idx(x, y);
         if (grid[i] !== 1 || visited[i] || claimed[i]) continue;
         // BFS this component
@@ -156,7 +158,7 @@
           if (py < minY) minY = py;
           const neigh = [[px-1,py],[px+1,py],[px,py-1],[px,py+1]];
           for (const [nx, ny] of neigh) {
-            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+            if (nx < 0 || nx >= WORLD_W || ny < 0 || ny >= H) continue;
             const ni = idx(nx, ny);
             if (grid[ni] === 1 && !visited[ni] && !claimed[ni]) {
               claimed[ni] = 1; st.push(nx, ny);
@@ -187,7 +189,7 @@
     for (let k = 0; k < p.length; k += 2) {
       const gx = ox + p[k], gy = oy + p[k+1];
       if (gy >= H) return true;
-      if (gx < 0 || gx >= W) return true;
+      if (gx < 0 || gx >= WORLD_W) return true;
       if (gy >= 0 && grid[idx(gx, gy)] === 1) return true;
     }
     return false;
@@ -201,7 +203,7 @@
     const colData = new Map(); // worldX -> { count, maxRelY }
     for (let k = 0; k < p.length; k += 2) {
       const gx = chunk.x + p[k];
-      if (gx < 0 || gx >= W) continue;
+      if (gx < 0 || gx >= WORLD_W) continue;
       const relY = p[k+1];
       const existing = colData.get(gx);
       if (existing) {
@@ -332,7 +334,7 @@
         const py = Math.floor(player.y);
         for (let dx = -4; dx <= 4; dx++) {
           const tx = Math.floor(player.x) + dx;
-          if (tx < 0 || tx >= W) continue;
+          if (tx < 0 || tx >= WORLD_W) continue;
           for (let y = py; y < Math.min(H, py + 2); y++) {
             if (grid[idx(tx, y)] === 1) {
               tctx.fillStyle = '#a01020';
@@ -467,6 +469,16 @@
     }
   }
 
+  // Camera: follow the player horizontally once they pass the viewport midpoint.
+  // Acts like a classic side-scroller — left half of the world acts normally,
+  // moving right past the centre scrolls the camera.
+  function updateCamera() {
+    const targetX = Math.max(0, Math.min(WORLD_W - W, player.x - W / 2));
+    cameraX = targetX;
+    // Keep mouseX synced to world coords even when the cursor isn't moving.
+    if (typeof mouseScreenX === 'number') mouseX = mouseScreenX + cameraX;
+  }
+
   // Rendering
   function renderTerrain() {
     const d = terrainImg.data;
@@ -475,7 +487,7 @@
       d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 0;
     }
     // Find top-of-column for grass tinting
-    for (let x = 0; x < W; x++) {
+    for (let x = 0; x < WORLD_W; x++) {
       let topY = -1;
       for (let y = 0; y < H; y++) {
         if (grid[idx(x, y)] === 1) { topY = y; break; }
@@ -483,7 +495,7 @@
       if (topY < 0) continue;
       for (let y = topY; y < H; y++) {
         if (grid[idx(x, y)] !== 1) continue;
-        const di = (y * W + x) * 4;
+        const di = (y * WORLD_W + x) * 4;
         let col;
         const depth = y - topY;
         if (depth === 0)        col = COL_GRASS;
@@ -498,14 +510,14 @@
       }
     }
     // Edge border — any non-grass terrain pixel touching air gets a dark tint
-    for (let x = 0; x < W; x++) {
+    for (let x = 0; x < WORLD_W; x++) {
       for (let y = 0; y < H; y++) {
         if (grid[idx(x, y)] !== 1) continue;
-        const di = (y * W + x) * 4;
+        const di = (y * WORLD_W + x) * 4;
         // Skip grass pixels (bright green top rows)
         if (d[di+1] > 160 && d[di] < 100) continue;
         const hasAir = (x > 0   && grid[idx(x-1, y)] !== 1) ||
-                       (x < W-1 && grid[idx(x+1, y)] !== 1) ||
+                       (x < WORLD_W-1 && grid[idx(x+1, y)] !== 1) ||
                        (y > 0   && grid[idx(x, y-1)] !== 1) ||
                        (y < H-1 && grid[idx(x, y+1)] !== 1);
         if (hasAir) {
@@ -601,6 +613,10 @@
     renderClouds();
 
     if (terrainDirty) renderTerrain();
+
+    // === BEGIN WORLD-SPACE RENDERING (camera offset applied) ===
+    ctx.save();
+    ctx.translate(-cameraX, 0);
 
     // Explosion flashes — drawn BEFORE terrain so they glow from inside the
     // crater. The current (post-carve) terrain then overlays them, so the
@@ -808,7 +824,7 @@
       // (which may differ by several pixels) are still reached.
       function legFootY(col, top) {
         if (!player.onGround) return baseBottom;
-        if (col < 0 || col >= W) return baseBottom;
+        if (col < 0 || col >= WORLD_W) return baseBottom;
         const minY = top + 1;
         const maxY = baseBottom + 4;
         for (let yy = minY; yy <= maxY; yy++) {
@@ -1021,8 +1037,11 @@
     }
     ctx.restore();
 
+    // === END WORLD-SPACE RENDERING (back to screen space for HUD) ===
+    ctx.restore();
+
     // Aim reticle — per-weapon style, with dark outline for visibility
-    const mx = Math.floor(mouseX), my = Math.floor(mouseY);
+    const mx = Math.floor(mouseX - cameraX), my = Math.floor(mouseY);
     ctx.lineWidth = 1;
     if (weapon === 'mg') {
       ctx.strokeStyle = 'rgba(0,0,0,0.5)';
@@ -1132,6 +1151,10 @@
         // Flashing alpha for all targeting boxes (fast pulse)
         const flashAlpha = 0.4 + 0.6 * Math.sin(windT * 0.5);
 
+        // Boxes are placed at world coords; shift into screen space.
+        ctx.save();
+        ctx.translate(-cameraX, 0);
+
         // Helper: draw a box made of 4 separate lines with gaps at the corners
         function drawTargetBox(cx, cy, hw, hh, gap) {
           // Top edge (inset from corners by gap)
@@ -1195,6 +1218,7 @@
         }
         ctx.textAlign = 'start';
         ctx.textBaseline = 'alphabetic';
+        ctx.restore(); // end world-space transform for targeting boxes
       } else {
         // Standard blue slow-mo filter
         ctx.fillStyle = 'rgba(80,140,220,0.18)';
@@ -1394,7 +1418,7 @@
     // HP bar above player
     if (!player.dead) {
       const hpW = 16;
-      const hpx = Math.floor(player.x - hpW / 2);
+      const hpx = Math.floor(player.x - hpW / 2 - cameraX);
       const hpy = Math.floor(player.y - player.h) - 4;
       ctx.fillStyle = '#000';
       ctx.fillRect(hpx - 1, hpy - 1, hpW + 2, 3);
@@ -1567,11 +1591,13 @@
     player.cookTime = 0;
   }
 
-  let mouseX = 0, mouseY = 0;
+  let mouseX = 0, mouseY = 0;       // world-space coordinates of the cursor
+  let mouseScreenX = 0;              // screen-space x for the reticle drawing
   function setMouseFromEvent(e) {
     if (paused) return;
     const rect = canvas.getBoundingClientRect();
-    mouseX = Math.floor((e.clientX - rect.left) * (W / rect.width));
+    mouseScreenX = Math.floor((e.clientX - rect.left) * (W / rect.width));
+    mouseX = mouseScreenX + cameraX;
     mouseY = Math.floor((e.clientY - rect.top)  * (H / rect.height));
   }
   window.addEventListener('mousemove', setMouseFromEvent);
@@ -1679,7 +1705,7 @@
   function fillCircle(cx, cy, r) {
     const r2 = r * r;
     const x0 = Math.max(0, Math.floor(cx - r));
-    const x1 = Math.min(W - 1, Math.ceil(cx + r));
+    const x1 = Math.min(WORLD_W - 1, Math.ceil(cx + r));
     const y0 = Math.max(0, Math.floor(cy - r));
     const y1 = Math.min(H - 1, Math.ceil(cy + r));
     // Exclude pixels overlapping the player so building near yourself can't
@@ -1706,7 +1732,7 @@
         const x = candidates[k], y = candidates[k + 1];
         if (grid[idx(x, y)] === 1) continue;
         if ((x > 0     && grid[idx(x - 1, y)] === 1) ||
-            (x < W - 1 && grid[idx(x + 1, y)] === 1) ||
+            (x < WORLD_W - 1 && grid[idx(x + 1, y)] === 1) ||
             (y > 0     && grid[idx(x, y - 1)] === 1) ||
             (y < H - 1 && grid[idx(x, y + 1)] === 1)) {
           grid[idx(x, y)] = 1;
@@ -1798,10 +1824,10 @@
       // Hit terrain or floor — small explosion and remove
       const gx = Math.floor(d.x), gy = Math.floor(d.y + UFO_H / 2);
       let hitGround = gy >= H;
-      if (!hitGround && gy >= 0 && gx >= 0 && gx < W) {
+      if (!hitGround && gy >= 0 && gx >= 0 && gx < WORLD_W) {
         if (grid[idx(gx, gy)] === 1) hitGround = true;
       }
-      if (hitGround || d.life <= 0 || d.x < -30 || d.x > W + 30) {
+      if (hitGround || d.life <= 0 || d.x < -30 || d.x > WORLD_W + 30) {
         if (hitGround) {
           // Small impact explosion
           explode(d.x, Math.min(H - 1, d.y + UFO_H / 2), 10, 30, 25, 0.4);
@@ -1869,7 +1895,7 @@
     for (let s = 1; s <= MAX_STEPS; s++) {
       const px = x0 + ux * s;
       const py = y0 + uy * s;
-      if (px < 0 || px >= W || py >= H || py < -20) { endX = px; endY = py; break; }
+      if (px < 0 || px >= WORLD_W || py >= H || py < -20) { endX = px; endY = py; break; }
       endX = px; endY = py;
       // Bisect UFOs the beam crosses (dismemberment)
       const u = ufoAt(px, py);
@@ -1880,7 +1906,7 @@
       // Carve terrain along the beam
       if (py >= 0) {
         const gx = Math.floor(px), gy = Math.floor(py);
-        if (gx >= 0 && gx < W && grid[idx(gx, gy)] === 1) {
+        if (gx >= 0 && gx < WORLD_W && grid[idx(gx, gy)] === 1) {
           carveCircle(gx, gy, 7, false);
         }
       }
@@ -1896,7 +1922,7 @@
   // into the surface so it doesn't dangle as a thin appendage.
   function fillBlock(cx, cy, half) {
     const x0 = Math.max(0, Math.floor(cx - half));
-    const x1 = Math.min(W - 1, Math.floor(cx + half));
+    const x1 = Math.min(WORLD_W - 1, Math.floor(cx + half));
     const y0 = Math.max(0, Math.floor(cy - half));
     const y1 = Math.min(H - 1, Math.floor(cy + half));
     const pad = 1;
@@ -1921,7 +1947,7 @@
         const x = candidates[k], y = candidates[k + 1];
         if (grid[idx(x, y)] === 1) continue;
         if ((x > 0     && grid[idx(x - 1, y)] === 1) ||
-            (x < W - 1 && grid[idx(x + 1, y)] === 1) ||
+            (x < WORLD_W - 1 && grid[idx(x + 1, y)] === 1) ||
             (y > 0     && grid[idx(x, y - 1)] === 1) ||
             (y < H - 1 && grid[idx(x, y + 1)] === 1)) {
           grid[idx(x, y)] = 1;
@@ -2076,7 +2102,7 @@
     for (let s = 1; s <= MAX_STEPS; s++) {
       const px = x0 + ux * s;
       const py = y0 + uy * s;
-      if (px < 0 || px >= W || py >= H || py < -20) { endX = px; endY = py; break; }
+      if (px < 0 || px >= WORLD_W || py >= H || py < -20) { endX = px; endY = py; break; }
       endX = px; endY = py;
       // Instantly kill any UFO the beam crosses
       const u = ufoAt(px, py);
@@ -2087,7 +2113,7 @@
       // Carve terrain along the beam
       if (py >= 0) {
         const gx = Math.floor(px), gy = Math.floor(py);
-        if (gx >= 0 && gx < W && grid[idx(gx, gy)] === 1) {
+        if (gx >= 0 && gx < WORLD_W && grid[idx(gx, gy)] === 1) {
           carveCircle(gx, gy, 5, false);
         }
       }
@@ -2153,7 +2179,7 @@
         const nx = b.x + b.vx / steps;
         const ny = b.y + b.vy / steps;
         const gx = Math.floor(nx), gy = Math.floor(ny);
-        if (gx < 0 || gx >= W || gy >= H) { dead = true; break; }
+        if (gx < 0 || gx >= WORLD_W || gy >= H) { dead = true; break; }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           // Paint blood onto terrain at the impact spot
           const px = Math.floor(b.x), py = Math.floor(b.y);
@@ -2273,7 +2299,7 @@
         r.x += r.vx / steps;
         r.y += r.vy / steps;
         const gx = Math.floor(r.x), gy = Math.floor(r.y);
-        if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        if (gx < 0 || gx >= WORLD_W || gy >= H) { hit = true; break; }
         { const u = ufoAt(r.x, r.y); if (u) {
           // Big bite mark from rocket impact
           const biteR = 2.0 + Math.random() * 1.5;
@@ -2318,7 +2344,7 @@
   }
 
   function grenadeSolidAt(gx, gy) {
-    if (gx < 0 || gx >= W) return true;
+    if (gx < 0 || gx >= WORLD_W) return true;
     if (gy >= H) return true;
     if (gy < 0) return false;
     return grid[idx(gx, gy)] === 1;
@@ -2384,7 +2410,7 @@
       const ang = (i / samples) * Math.PI * 2;
       const sx = Math.floor(ball.x + Math.cos(ang) * ball.r);
       const sy = Math.floor(ball.y + Math.sin(ang) * ball.r);
-      if (sx < 0 || sx >= W) { pushX -= Math.cos(ang); contacts++; continue; }
+      if (sx < 0 || sx >= WORLD_W) { pushX -= Math.cos(ang); contacts++; continue; }
       if (sy >= H) { pushY -= Math.sin(ang); contacts++; continue; }
       if (sy >= 0 && grid[idx(sx, sy)] === 1) {
         pushX -= Math.cos(ang);
@@ -2443,7 +2469,7 @@
 
       // Clamp to world
       if (ball.x < ball.r) { ball.x = ball.r; ball.vx = Math.abs(ball.vx) * PHYS_RESTITUTION; }
-      if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx) * PHYS_RESTITUTION; }
+      if (ball.x > WORLD_W - ball.r) { ball.x = WORLD_W - ball.r; ball.vx = -Math.abs(ball.vx) * PHYS_RESTITUTION; }
       if (ball.y > H + 50) { ball.y = -10; ball.vy = 0; } // wrap if falls out
     }
 
@@ -2566,7 +2592,7 @@
         b.x += b.vx / steps;
         b.y += b.vy / steps;
         const gx = Math.floor(b.x), gy = Math.floor(b.y);
-        if (gx < 0 || gx >= W || gy >= H) { hit = true; break; }
+        if (gx < 0 || gx >= WORLD_W || gy >= H) { hit = true; break; }
         // Bullet hits physics ball — knock it
         { let ballHit = false;
           for (const ball of physBalls) {
@@ -2665,7 +2691,7 @@
     trees.length = 0;
     const count = 12 + ((Math.random() * 6) | 0);
     for (let i = 0; i < count; i++) {
-      const tx = Math.floor(20 + Math.random() * (W - 40));
+      const tx = Math.floor(20 + Math.random() * (WORLD_W - 40));
       const top = groundTopAt(tx);
       if (top < 0) continue; // no ground here, skip
       const tcw = 4 + ((Math.random() * 6) | 0);
@@ -2686,7 +2712,7 @@
     }
   }
   function groundTopAt(x) {
-    if (x < 0 || x >= W) return -1;
+    if (x < 0 || x >= WORLD_W) return -1;
     for (let y = 0; y < H; y++) if (grid[idx(x, y)] === 1) return y;
     return -1;
   }
@@ -2696,7 +2722,7 @@
     bushes.length = 0;
     grassBlades.length = 0;
     for (let i = 0; i < 18; i++) {
-      const bx = Math.floor(10 + Math.random() * (W - 20));
+      const bx = Math.floor(10 + Math.random() * (WORLD_W - 20));
       const top = groundTopAt(bx);
       if (top < 0) continue;
       bushes.push({
@@ -2708,7 +2734,7 @@
       });
     }
     for (let i = 0; i < 50; i++) {
-      const gx = Math.floor(5 + Math.random() * (W - 10));
+      const gx = Math.floor(5 + Math.random() * (WORLD_W - 10));
       const top = groundTopAt(gx);
       if (top < 0) continue;
       grassBlades.push({
@@ -2808,7 +2834,7 @@
           // Find the highest terrain top across the canopy's footprint.
           let groundTop = H;
           for (let x = Math.floor(t.canopyX - t.cw); x <= Math.floor(t.canopyX + t.cw); x++) {
-            if (x < 0 || x >= W) continue;
+            if (x < 0 || x >= WORLD_W) continue;
             const gt = groundTopAt(x);
             if (gt >= 0 && gt < groundTop) groundTop = gt;
           }
@@ -2959,7 +2985,7 @@
   const packs = [];
   function spawnPack(x, kind) {
     packs.push({
-      x: Math.max(8, Math.min(W - 8, x | 0)),
+      x: Math.max(8, Math.min(WORLD_W - 8, x | 0)),
       y: -6,
       vy: 0,
       bob: Math.random() * 6.28,
@@ -2969,7 +2995,7 @@
     });
   }
   function packSolidAt(gx, gy) {
-    if (gx < 0 || gx >= W) return true;
+    if (gx < 0 || gx >= WORLD_W) return true;
     if (gy >= H) return true;
     if (gy < 0) return false;
     return grid[idx(gx, gy)] === 1;
@@ -3139,7 +3165,7 @@
     const yMin = 14, yMax = 96;
     const ySlot = (yMax - yMin) / count;
     const yJitter = ySlot * 0.15;
-    const xSlot = (W - 40) / count;
+    const xSlot = (WORLD_W - 40) / count;
     const xOrder = Array.from({ length: count }, (_, i) => i);
     for (let i = xOrder.length - 1; i > 0; i--) {
       const j = (Math.random() * (i + 1)) | 0;
@@ -3298,7 +3324,7 @@
         if (!inTerrain) {
           for (let dx = -UFO_W / 2; dx <= UFO_W / 2; dx += 2) {
             const gx = Math.floor(u.x + dx);
-            if (gx >= 0 && gx < W && gy >= 0 && grid[idx(gx, gy)] === 1) {
+            if (gx >= 0 && gx < WORLD_W && gy >= 0 && grid[idx(gx, gy)] === 1) {
               inTerrain = true; break;
             }
           }
@@ -3315,13 +3341,13 @@
       }
       // Alive — drift toward staying within a band around the player's column
       u.bob += u.bobSpeed;
-      const desiredX = Math.max(20, Math.min(W - 20, player.x));
+      const desiredX = Math.max(20, Math.min(WORLD_W - 20, player.x));
       const dx = desiredX - u.x;
       if (Math.abs(dx) > 30) u.vx += Math.sign(dx) * 0.008;
       u.vx = Math.max(-0.6, Math.min(0.6, u.vx));
       u.x += u.vx;
       if (u.x < 12) { u.x = 12; u.vx = Math.abs(u.vx); }
-      if (u.x > W - 12) { u.x = W - 12; u.vx = -Math.abs(u.vx); }
+      if (u.x > WORLD_W - 12) { u.x = WORLD_W - 12; u.vx = -Math.abs(u.vx); }
       u.y = u.baseY + Math.sin(u.bob) * 6;
       // Damage effects: smoke at ≤50% HP, fire at ≤30% HP
       const hpFrac = u.hp / u.maxHp;
@@ -3388,7 +3414,7 @@
         L.x += L.vx / steps;
         L.y += L.vy / steps;
         const gx = Math.floor(L.x), gy = Math.floor(L.y);
-        if (gx < 0 || gx >= W || gy >= H) { dead = true; break; }
+        if (gx < 0 || gx >= WORLD_W || gy >= H) { dead = true; break; }
         // Hit pack — destroy it
         // Hit health pack — destroy it (weapon packs are indestructible)
         for (let pi = packs.length - 1; pi >= 0; pi--) {
@@ -3601,7 +3627,7 @@
     for (let i = 0; i < Math.min(count, shuffled.length); i++) {
       const c = shuffled[i];
       packs.push({
-        x: Math.max(8, Math.min(W - 8, c.x | 0)),
+        x: Math.max(8, Math.min(WORLD_W - 8, c.x | 0)),
         y: c.y | 0,
         vy: 0.4,
         landed: false,
@@ -3621,7 +3647,7 @@
   // Spawn physics balls and truck only in debug mode
   if (DEBUG) {
     for (let i = 0; i < 5; i++) {
-      const bx = 40 + Math.random() * (W - 80);
+      const bx = 40 + Math.random() * (WORLD_W - 80);
       spawnBall(bx, 10 + Math.random() * 20, 3 + Math.floor(Math.random() * 3), (Math.random() - 0.5) * 2, 0);
     }
   }
@@ -3683,6 +3709,7 @@
       updateBushes();
       updateChunks();
       updatePlayer();
+      updateCamera();
       updateBullets();
       updateRockets();
       updateGrenades();
@@ -3705,7 +3732,7 @@
       if (dashCooldown > 0) dashCooldown--;
       // Rare random aid drop — roughly once every ~25s on average.
       if (!player.dead && Math.random() < 0.0007 && packs.length < 4) {
-        spawnPack(20 + Math.random() * (W - 40));
+        spawnPack(20 + Math.random() * (WORLD_W - 40));
       }
       updateBloods();
       updateFlashes();
