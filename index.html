@@ -926,14 +926,14 @@
     ctx.textBaseline = 'alphabetic';
 
     if (!player.dead && !player.cooking) {
-    // Weapon — rotated to aim, shape per weapon
-    const gx0 = player.x;
-    const gy0 = player.y - player.h / 2;
-    const adx = mouseX - gx0, ady = mouseY - gy0;
-    const ang = Math.atan2(ady, adx);
-    ctx.save();
-    ctx.translate(gx0, gy0);
-    ctx.rotate(ang);
+      // Weapon — rotated to aim, shape per weapon
+      const gx0 = player.x;
+      const gy0 = player.y - player.h / 2;
+      const adx = mouseX - gx0, ady = mouseY - gy0;
+      const ang = Math.atan2(ady, adx);
+      ctx.save();
+      ctx.translate(gx0, gy0);
+      ctx.rotate(ang);
     // When aiming to the left the sprite is rotated past vertical, which puts
     // grip/mag on top. Flip the local Y so "down" of the weapon stays toward
     // the player's feet regardless of facing.
@@ -1115,6 +1115,10 @@
       ctx.fillStyle = '#80d0ff';
       ctx.fillRect(mx, my, 1, 1);
     }
+    }
+    else {
+      // === END WORLD-SPACE RENDERING (back to screen space for HUD) ===
+      ctx.restore();
     }
 
     // Builder energy meter — only while BUILDER is equipped.
