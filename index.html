@@ -2205,6 +2205,23 @@
         });
       }
     }
+    // Destroy health packs caught in the blast (weapon packs are indestructible)
+    for (let i = packs.length - 1; i >= 0; i--) {
+      const p = packs[i];
+      if (p.kind !== 'health') continue;
+      const pdist = Math.hypot(p.x - x, p.y - y);
+      if (pdist < blastR) {
+        for (let k = 0; k < 6; k++) {
+          flashes.push({
+            x: p.x + (Math.random() - 0.5) * 4,
+            y: p.y + (Math.random() - 0.5) * 4,
+            r: 1 + Math.random(), maxLife: 10, life: 10,
+            color: '#90ff90',
+          });
+        }
+        packs.splice(i, 1);
+      }
+    }
   }
 
   // Rockets — straight-flying projectiles that explode on terrain contact
@@ -2587,6 +2604,22 @@
           }
           damageUfo(u, 1); hit = true; break;
         } }
+        // Bullet hits health pack — destroy it (weapon packs are indestructible)
+        { let packHit = false;
+          for (let pi = packs.length - 1; pi >= 0; pi--) {
+            const p = packs[pi];
+            if (p.kind !== 'health') continue;
+            if (Math.abs(b.x - p.x) < 4 && Math.abs(b.y - p.y) < 4) {
+              for (let k = 0; k < 6; k++) {
+                flashes.push({ x: p.x + (Math.random() - 0.5) * 4, y: p.y + (Math.random() - 0.5) * 4,
+                  r: 1 + Math.random(), maxLife: 10, life: 10, color: '#90ff90' });
+              }
+              packs.splice(pi, 1);
+              packHit = true; break;
+            }
+          }
+          if (packHit) { hit = true; break; }
+        }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           if (b.kind === 'build') {
             fillCircle(gx, gy, 4);
@@ -3356,6 +3389,21 @@
         L.y += L.vy / steps;
         const gx = Math.floor(L.x), gy = Math.floor(L.y);
         if (gx < 0 || gx >= W || gy >= H) { dead = true; break; }
+        // Hit pack — destroy it
+        // Hit health pack — destroy it (weapon packs are indestructible)
+        for (let pi = packs.length - 1; pi >= 0; pi--) {
+          const p = packs[pi];
+          if (p.kind !== 'health') continue;
+          if (Math.abs(L.x - p.x) < 4 && Math.abs(L.y - p.y) < 4) {
+            for (let k = 0; k < 6; k++) {
+              flashes.push({ x: p.x + (Math.random() - 0.5) * 4, y: p.y + (Math.random() - 0.5) * 4,
+                r: 1 + Math.random(), maxLife: 10, life: 10, color: '#90ff90' });
+            }
+            packs.splice(pi, 1);
+            dead = true; break;
+          }
+        }
+        if (dead) break;
         // Hit terrain → small crater
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           carveCircle(gx, gy, 4, true);
