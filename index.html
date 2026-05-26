@@ -2253,6 +2253,20 @@
         packs.splice(i, 1);
       }
     }
+    // Detonate enemy laser bolts caught in the blast (chain reaction)
+    // Iterative to avoid recursion + array mutation issues during the outer loop.
+    const detonateQueue = [];
+    for (let i = lasers.length - 1; i >= 0; i--) {
+      const L = lasers[i];
+      const ldist = Math.hypot(L.x - x, L.y - y);
+      if (ldist < blastR) {
+        detonateQueue.push({ x: L.x, y: L.y });
+        lasers.splice(i, 1);
+      }
+    }
+    for (const det of detonateQueue) {
+      explode(det.x, det.y, 8, 25, 20, 0.4);
+    }
   }
 
   // Rockets — straight-flying projectiles that explode on terrain contact
@@ -2635,6 +2649,19 @@
           }
           damageUfo(u, 1); hit = true; break;
         } }
+        // Bullet hits enemy laser bolt — detonate it
+        { let laserHit = false;
+          for (let li = lasers.length - 1; li >= 0; li--) {
+            const L = lasers[li];
+            if (Math.abs(b.x - L.x) < 3 && Math.abs(b.y - L.y) < 3) {
+              const lx = L.x, ly = L.y;
+              lasers.splice(li, 1);
+              explode(lx, ly, 8, 25, 20, 0.4);
+              laserHit = true; break;
+            }
+          }
+          if (laserHit) { hit = true; break; }
+        }
         // Bullet hits health pack — destroy it (weapon packs are indestructible)
         { let packHit = false;
           for (let pi = packs.length - 1; pi >= 0; pi--) {
