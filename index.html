@@ -3212,6 +3212,10 @@
       const baseY = yMin + i * ySlot + (Math.random() * 2 - 1) * yJitter;
       const slot = xOrder[i];
       const x = 20 + slot * xSlot + Math.random() * xSlot;
+      // Green variant chance scales with wave index: starts low (~5%) and
+      // climbs to ~50% at wave 10+. Green ships shoot piercing green lasers.
+      const greenChance = Math.min(0.5, 0.05 + waveIndex * 0.05);
+      const isGreen = Math.random() < greenChance;
       ufos.push({
         x,
         // Start off the top of the screen and fly down to baseY.
@@ -3226,6 +3230,7 @@
         state: 'entering',     // 'entering' | 'alive' | 'falling'
         vy: 0,
         bites: [],             // bullet impact craters (local coords {lx, ly, r})
+        green: isGreen,        // green variant — fires piercing green lasers
       });
     }
   }
@@ -3328,6 +3333,7 @@
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
       life: 240,
+      green: !!u.green, // green variant lasers pierce terrain
     });
   }
   function updateUfos() {
@@ -3446,12 +3452,14 @@
       const L = lasers[i];
       const steps = Math.max(1, Math.ceil(Math.max(Math.abs(L.vx), Math.abs(L.vy))));
       let dead = false;
+      // Green-laser piercing: tracks how far the bolt has travelled while
+      // inside terrain. Bolt dies once it has cleared its pierce distance.
+      const PIERCE_MAX_PX = 4;
       for (let s = 0; s < steps; s++) {
         L.x += L.vx / steps;
         L.y += L.vy / steps;
         const gx = Math.floor(L.x), gy = Math.floor(L.y);
         if (gx < 0 || gx >= WORLD_W || gy >= H) { dead = true; break; }
-        // Hit pack — destroy it
         // Hit health pack — destroy it (weapon packs are indestructible)
         for (let pi = packs.length - 1; pi >= 0; pi--) {
           const p = packs[pi];
@@ -3466,25 +3474,40 @@
           }
         }
         if (dead) break;
-        // Hit terrain → small crater
+        // Hit terrain
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
-          carveCircle(gx, gy, 4, true);
-          flashes.push({ x: gx, y: gy, r: 4, maxLife: 6, life: 6, color: '#ff5050' });
-          addShake(0.35);
-          dead = true; break;
+          if (L.green) {
+            // Mark how far we've travelled while overlapping terrain
+            L.pierced = (L.pierced || 0) + (1 / steps);
+            // Carve a single pixel (no big crater) so the bolt can keep moving
+            grid[idx(gx, gy)] = 0;
+            terrainDirty = true;
+            if ((s & 1) === 0) {
+              flashes.push({ x: gx, y: gy, r: 1.5, maxLife: 5, life: 5, color: '#80ff80' });
+            }
+            if (L.pierced >= PIERCE_MAX_PX) {
+              flashes.push({ x: gx, y: gy, r: 3, maxLife: 6, life: 6, color: '#80ff80' });
+              addShake(0.2);
+              dead = true; break;
+            }
+          } else {
+            carveCircle(gx, gy, 4, true);
+            flashes.push({ x: gx, y: gy, r: 4, maxLife: 6, life: 6, color: '#ff5050' });
+            addShake(0.35);
+            dead = true; break;
+          }
         }
         // Hit player
         if (!player.dead) {
           const pcx = player.x, pcy = player.y - player.h / 2;
           if (Math.abs(L.x - pcx) < 3 && Math.abs(L.y - pcy) < player.h / 2 + 1) {
-            player.hp = Math.max(0, player.hp - 12);
+            const dmg = L.green ? 16 : 12;
+            player.hp = Math.max(0, player.hp - dmg);
             playerHitFlash = Math.min(1, playerHitFlash + 0.6);
-            // Shunt along the laser's direction of travel
             const lsp = Math.hypot(L.vx, L.vy) || 1;
             player.vx += (L.vx / lsp) * 1.6;
             player.vy -= 0.6;
             if (player.hp === 0) { player.dead = true; player.deathTimer = 0; if (finalElapsedMs === null) finalElapsedMs = Date.now() - gameStartMs; }
-            // Splash of blood
             for (let k = 0; k < 8; k++) {
               const ang = Math.random() * Math.PI * 2;
               const sp = 1 + Math.random() * 2;
@@ -3530,39 +3553,40 @@
       const x = u.x, y = u.y;
       const hasBites = u.bites && u.bites.length > 0;
 
+      // Colour palette per variant
+      const baseCol = u.green ? '#1a3a18' : '#222';
+      const stripeCol = u.green ? '#2a5a26' : '#3a3a3a';
+      const domeCol = u.green ? '#2a8a30' : '#1d3a55';
+      const domeHigh = u.green ? '#5ae060' : '#3b6f9c';
+
       if (hasBites) {
         // Draw UFO body onto offscreen buffer, then punch out bites
         const bw = ufoBuffer.width, bh = ufoBuffer.height;
-        // Centre of the buffer in local coords
         const cx = bw / 2, cy = bh / 2;
         ubctx.clearRect(0, 0, bw, bh);
 
-        // Saucer base
-        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#222';
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : baseCol;
         ubctx.beginPath();
         ubctx.ellipse(cx, cy + 2, UFO_W / 2, 3, 0, 0, Math.PI * 2);
         ubctx.fill();
-        // Underbelly stripe
-        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3a3a3a';
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : stripeCol;
         ubctx.fillRect(Math.floor(cx - UFO_W / 2 + 1), Math.floor(cy + 1), UFO_W - 2, 1);
-        // Dome
-        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#1d3a55';
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : domeCol;
         ubctx.beginPath();
         ubctx.arc(cx, cy + 1, 5, Math.PI, 0);
         ubctx.fill();
-        // Dome highlight
-        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3b6f9c';
+        ubctx.fillStyle = u.hitFlash > 0 ? '#fff' : domeHigh;
         ubctx.fillRect(Math.floor(cx - 2), Math.floor(cy - 3), 1, 1);
-        // Underside lights
         const tt = (windT * 0.15) | 0;
-        const cols = ['#ffe040', '#ff4060', '#40e0ff'];
+        const cols = u.green
+          ? ['#80ff80', '#40e040', '#a0ffa0']
+          : ['#ffe040', '#ff4060', '#40e0ff'];
         const lightYs = Math.floor(cy + 4);
         [-7, -2, 3, 8].forEach((dx, i) => {
           ubctx.fillStyle = cols[(tt + i) % cols.length];
           ubctx.fillRect(Math.floor(cx + dx), lightYs, 1, 1);
         });
 
-        // Punch out bite marks
         ubctx.globalCompositeOperation = 'destination-out';
         for (const bite of u.bites) {
           ubctx.beginPath();
@@ -3571,24 +3595,25 @@
         }
         ubctx.globalCompositeOperation = 'source-over';
 
-        // Stamp the buffer onto the main canvas
         ctx.drawImage(ufoBuffer, x - bw / 2, y - bh / 2);
       } else {
         // No bites — draw directly (faster path)
-        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#222';
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : baseCol;
         ctx.beginPath();
         ctx.ellipse(x, y + 2, UFO_W / 2, 3, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3a3a3a';
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : stripeCol;
         ctx.fillRect(Math.floor(x - UFO_W / 2 + 1), Math.floor(y + 1), UFO_W - 2, 1);
-        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#1d3a55';
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : domeCol;
         ctx.beginPath();
         ctx.arc(x, y + 1, 5, Math.PI, 0);
         ctx.fill();
-        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : '#3b6f9c';
+        ctx.fillStyle = u.hitFlash > 0 ? '#fff' : domeHigh;
         ctx.fillRect(Math.floor(x - 2), Math.floor(y - 3), 1, 1);
         const tt = (windT * 0.15) | 0;
-        const cols = ['#ffe040', '#ff4060', '#40e0ff'];
+        const cols = u.green
+          ? ['#80ff80', '#40e040', '#a0ffa0']
+          : ['#ffe040', '#ff4060', '#40e0ff'];
         const lightYs = Math.floor(y + 4);
         [-7, -2, 3, 8].forEach((dx, i) => {
           ctx.fillStyle = cols[(tt + i) % cols.length];
@@ -3616,17 +3641,27 @@
       const sp = Math.hypot(L.vx, L.vy) || 1;
       const ux = L.vx / sp, uy = L.vy / sp;
       const hx = Math.floor(L.x), hy = Math.floor(L.y);
-      // Dark halo so the bolt reads on a bright sky
-      ctx.fillStyle = '#3a0000';
-      ctx.fillRect(hx - 1, hy - 1, 4, 4);
-      // Trail (darker red further back)
-      ctx.fillStyle = '#a01818';
-      ctx.fillRect(Math.floor(L.x - ux * 4), Math.floor(L.y - uy * 4), 2, 2);
-      ctx.fillStyle = '#e02020';
-      ctx.fillRect(Math.floor(L.x - ux * 2), Math.floor(L.y - uy * 2), 2, 2);
-      // Bright head
-      ctx.fillStyle = '#ffd0d0';
-      ctx.fillRect(hx, hy, 2, 2);
+      if (L.green) {
+        // Green variant — toxic-green colour palette
+        ctx.fillStyle = '#003a00';
+        ctx.fillRect(hx - 1, hy - 1, 4, 4);
+        ctx.fillStyle = '#18a018';
+        ctx.fillRect(Math.floor(L.x - ux * 4), Math.floor(L.y - uy * 4), 2, 2);
+        ctx.fillStyle = '#20e020';
+        ctx.fillRect(Math.floor(L.x - ux * 2), Math.floor(L.y - uy * 2), 2, 2);
+        ctx.fillStyle = '#d0ffd0';
+        ctx.fillRect(hx, hy, 2, 2);
+      } else {
+        // Standard red bolt
+        ctx.fillStyle = '#3a0000';
+        ctx.fillRect(hx - 1, hy - 1, 4, 4);
+        ctx.fillStyle = '#a01818';
+        ctx.fillRect(Math.floor(L.x - ux * 4), Math.floor(L.y - uy * 4), 2, 2);
+        ctx.fillStyle = '#e02020';
+        ctx.fillRect(Math.floor(L.x - ux * 2), Math.floor(L.y - uy * 2), 2, 2);
+        ctx.fillStyle = '#ffd0d0';
+        ctx.fillRect(hx, hy, 2, 2);
+      }
     }
   }
 
