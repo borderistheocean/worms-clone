@@ -931,9 +931,16 @@
       const gy0 = player.y - player.h / 2;
       const adx = mouseX - gx0, ady = mouseY - gy0;
       const ang = Math.atan2(ady, adx);
+      // Recoil jitter — grows the longer fire is held. Purely visual; the
+      // bullet spawn position/aim use player.x and mouseX, not this offset.
+      const recoilT = Math.min(1, fireShakeRamp / FIRE_RAMP_TICKS);
+      const jitterAmt = recoilT * 1.5;
+      const jx = (Math.random() * 2 - 1) * jitterAmt;
+      const jy = (Math.random() * 2 - 1) * jitterAmt;
+      const jr = (Math.random() * 2 - 1) * recoilT * 0.12; // slight angular wobble
       ctx.save();
-      ctx.translate(gx0, gy0);
-      ctx.rotate(ang);
+      ctx.translate(gx0 + jx, gy0 + jy);
+      ctx.rotate(ang + jr);
     // When aiming to the left the sprite is rotated past vertical, which puts
     // grip/mag on top. Flip the local Y so "down" of the weapon stays toward
     // the player's feet regardless of facing.
