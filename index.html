@@ -385,6 +385,7 @@
             vx: Math.cos(ang) * sp,
             vy: Math.sin(ang) * sp - 1.2,
             life: 90 + (Math.random() * 60) | 0,
+            green: false,
           });
         }
         const py = Math.floor(player.y);
@@ -409,6 +410,7 @@
           vx: (Math.random() - 0.5) * 0.6,
           vy: 0.3 + Math.random() * 0.6,
           life: 90,
+          green: false,
         });
       }
       return;
@@ -582,6 +584,548 @@
     terrainDirty = false;
   }
 
+  /* ----------------------------------------------------
+     GROUND ALIEN ENEMIES (COMPACT HITBOX & WIDE TUNNELING)
+  ---------------------------------------------------- */
+  const groundAliens = [];
+  const alienGibs = [];
+
+  function alienCollidesAt(x, y, w, h) {
+    const x0 = Math.floor(x - w / 2);
+    const x1 = Math.floor(x + w / 2 - 0.001);
+    const y0 = Math.floor(y - h);
+    const y1 = Math.floor(y - 0.001);
+    for (let py = y0; py <= y1; py++) {
+      for (let px = x0; px <= x1; px++) {
+        if (solid(px, py)) return true;
+      }
+    }
+    return false;
+  }
+
+  function groundAlienAt(x, y) {
+    for (const a of groundAliens) {
+      if (a.dead) continue;
+      if (Math.abs(x - a.x) <= a.w / 2 + 1.5 && y <= a.y && y >= a.y - a.h - 1.5) return a;
+    }
+    return null;
+  }
+
+  function spawnGroundAlien(x, y, vx = 0, vy = 0, hp = 12) {
+    let startY = y;
+    if (startY === undefined) {
+      const top = groundTopAt(Math.floor(x));
+      startY = top >= 0 ? top : 20;
+    }
+    const facing = vx !== 0 ? Math.sign(vx) : (Math.random() < 0.5 ? 1 : -1);
+    groundAliens.push({
+      x,
+      y: startY,
+      w: 5,
+      h: 7,
+      vx,
+      vy,
+      facing,
+      aimAngle: facing > 0 ? 0 : Math.PI,
+      hp,
+      maxHp: hp,
+      shootCd: 40 + ((Math.random() * 60) | 0),
+      digCd: 0,
+      patrolTimer: 60 + ((Math.random() * 90) | 0),
+      walkPhase: 0,
+      jumpCharge: 0,
+      breathT: Math.random() * 100,
+      onGround: false,
+      hitFlash: 0,
+      dead: false,
+    });
+  }
+
+  function findFirstTerrainHit(x0, y0, x1, y1) {
+    const dist = Math.hypot(x1 - x0, y1 - y0);
+    const steps = Math.ceil(dist / 2);
+    for (let s = 1; s <= steps; s++) {
+      const px = Math.floor(x0 + (x1 - x0) * (s / steps));
+      const py = Math.floor(y0 + (y1 - y0) * (s / steps));
+      if (solid(px, py)) return { x: px, y: py };
+    }
+    return null;
+  }
+
+  function hasLineOfSight(x0, y0, x1, y1) {
+    return findFirstTerrainHit(x0, y0, x1, y1) === null;
+  }
+
+  function spawnAlienGibs(a, impactVx = 0, impactVy = -1) {
+    const parts = [
+      { type: 'head',   w: 4, h: 3, ox: 0,  oy: -6 },
+      { type: 'body',   w: 5, h: 4, ox: 0,  oy: -3 },
+      { type: 'cannon', w: 4, h: 2, ox: a.facing * 2, oy: -4 },
+      { type: 'legL',   w: 1, h: 3, ox: -1.5, oy: -1 },
+      { type: 'legR',   w: 1, h: 3, ox: 1.5,  oy: -1 },
+    ];
+    for (const p of parts) {
+      const spreadX = (Math.random() - 0.5) * 2.5;
+      const spreadY = -Math.random() * 2.2 - 0.5;
+      alienGibs.push({
+        type: p.type,
+        x: a.x + p.ox,
+        y: a.y + p.oy,
+        w: p.w,
+        h: p.h,
+        vx: impactVx * 0.4 + spreadX,
+        vy: impactVy * 0.4 + spreadY,
+        angle: Math.random() * Math.PI * 2,
+        angVel: (Math.random() - 0.5) * 0.35,
+        landed: false,
+        facing: a.facing,
+      });
+    }
+  }
+
+  function damageGroundAlien(a, dmg, knockX, knockY) {
+    if (a.dead) return;
+    a.hp -= dmg;
+    a.hitFlash = 6;
+    hits++;
+    if (knockX !== undefined) a.vx += knockX;
+    if (knockY !== undefined) a.vy += knockY;
+
+    for (let k = 0; k < 12; k++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 1.2 + Math.random() * 2.8;
+      bloods.push({
+        x: a.x + (Math.random() - 0.5) * 3,
+        y: a.y - a.h / 2 + (Math.random() - 0.5) * 3,
+        vx: Math.cos(ang) * sp + (knockX || 0) * 0.2,
+        vy: Math.sin(ang) * sp - 0.8,
+        life: 60 + (Math.random() * 40) | 0,
+        green: true,
+      });
+    }
+
+    if (a.hp <= 0) {
+      a.dead = true;
+      killCount++;
+      hitStopFrames = Math.max(hitStopFrames, 2);
+      flashes.push({ x: a.x, y: a.y - a.h / 2, r: 10, maxLife: 10, life: 10, color: '#a0e040', explosion: true });
+
+      for (let k = 0; k < 55; k++) {
+        const ang = Math.random() * Math.PI * 2;
+        const sp = 1.2 + Math.random() * 3.8;
+        bloods.push({
+          x: a.x + (Math.random() - 0.5) * 4,
+          y: a.y - a.h / 2 + (Math.random() - 0.5) * 3,
+          vx: Math.cos(ang) * sp + (knockX || 0) * 0.3,
+          vy: Math.sin(ang) * sp - 1.8,
+          life: 90 + (Math.random() * 70) | 0,
+          green: true,
+        });
+      }
+
+      spawnAlienGibs(a, knockX || 0, knockY || -1);
+
+      // Dead aliens drop health packs
+      spawnPack(a.x, 'health', a.y - a.h / 2);
+
+      if (!DEBUG && nextDropIndex < WEAPON_DROPS.length && killCount >= WEAPON_DROPS[nextDropIndex].kill) {
+        spawnPack(a.x + (Math.random() - 0.5) * 15, WEAPON_DROPS[nextDropIndex].kind, a.y - a.h / 2);
+        nextDropIndex++;
+      }
+    }
+  }
+
+  function updateAlienGibs() {
+    for (let i = alienGibs.length - 1; i >= 0; i--) {
+      const g = alienGibs[i];
+      if (g.landed) {
+        const gx = Math.floor(g.x), gy = Math.floor(g.y);
+        if (gx >= 0 && gx < WORLD_W && gy < H && grid[idx(gx, gy)] !== 1) {
+          g.landed = false;
+        }
+        continue;
+      }
+
+      g.vy += 0.2;
+      if (g.vy > 5) g.vy = 5;
+      g.vx *= 0.985;
+      g.angle += g.angVel;
+
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(g.vx), Math.abs(g.vy))));
+      for (let s = 0; s < steps; s++) {
+        g.x += g.vx / steps;
+        g.y += g.vy / steps;
+        const gx = Math.floor(g.x), gy = Math.floor(g.y);
+        if (gx < 0 || gx >= WORLD_W || gy >= H) {
+          if (gy >= H) { g.y = H - 1; g.landed = true; }
+          break;
+        }
+        if (gy >= 0 && grid[idx(gx, gy)] === 1) {
+          if (Math.abs(g.vy) > 1.0) {
+            g.vy = -g.vy * 0.35;
+            g.vx *= 0.6;
+            g.angVel = (Math.random() - 0.5) * 0.25;
+          } else {
+            g.landed = true;
+            g.vx = 0; g.vy = 0; g.angVel = 0;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  function renderAlienGibs() {
+    for (const g of alienGibs) {
+      ctx.save();
+      ctx.translate(Math.floor(g.x), Math.floor(g.y));
+      ctx.rotate(g.angle);
+
+      if (g.type === 'head') {
+        ctx.fillStyle = '#0a200d'; ctx.fillRect(-2, -1.5, 4, 3);
+        ctx.fillStyle = '#1d5a22'; ctx.fillRect(-1.5, -1.5, 3, 2);
+        ctx.fillStyle = '#ff2a30'; ctx.fillRect(g.facing > 0 ? 1 : -1.5, -1, 1, 1);
+      } else if (g.type === 'body') {
+        ctx.fillStyle = '#08170b'; ctx.fillRect(-2.5, -2, 5, 4);
+        ctx.fillStyle = '#2ea034'; ctx.fillRect(-2, -1.5, 4, 3);
+        ctx.fillStyle = '#144018'; ctx.fillRect(-2, 0, 4, 1);
+      } else if (g.type === 'cannon') {
+        ctx.fillStyle = '#0d2810'; ctx.fillRect(-2, -1, 4, 2);
+        ctx.fillStyle = '#80ff40'; ctx.fillRect(1, -0.5, 1, 1);
+      } else {
+        ctx.fillStyle = '#0f3314'; ctx.fillRect(-0.5, -1.5, 1, 3);
+        ctx.fillStyle = '#80ff40'; ctx.fillRect(-0.5, 1.5, 1, 1);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  function ejectCrewFromUfo(u) {
+    const crewCount = 1 + (Math.random() < 0.45 ? 1 : 0);
+    for (let c = 0; c < crewCount; c++) {
+      const ejectSpeed = 1.6 + Math.random() * 1.5;
+      const angle = -Math.PI * 0.5 + (Math.random() - 0.5) * 1.2;
+      const vx = Math.cos(angle) * ejectSpeed + (u.vx || 0) * 0.4;
+      const vy = Math.sin(angle) * ejectSpeed - 1.5;
+      spawnGroundAlien(u.x + (Math.random() - 0.5) * 8, u.y, vx, vy, 12 + waveIndex * 2);
+      
+      for (let k = 0; k < 5; k++) {
+        flashes.push({
+          x: u.x + (Math.random() - 0.5) * 6,
+          y: u.y + (Math.random() - 0.5) * 6,
+          r: 2 + Math.random(),
+          maxLife: 10,
+          life: 10,
+          color: '#80ff40',
+        });
+      }
+    }
+  }
+
+  function updateGroundAliens() {
+    const pcx = player.x, pcy = player.y - player.h / 2;
+
+    for (let i = groundAliens.length - 1; i >= 0; i--) {
+      const a = groundAliens[i];
+      if (a.dead) {
+        groundAliens.splice(i, 1);
+        continue;
+      }
+      if (a.hitFlash > 0) a.hitFlash--;
+      if (a.digCd > 0) a.digCd--;
+      a.breathT++;
+
+      const acy = a.y - a.h / 2;
+      const dx = pcx - a.x;
+      const dy = pcy - acy;
+      const distToPlayer = Math.hypot(dx, dy);
+
+      let moveDir = 0;
+      let wantJump = false;
+      const playerAware = !player.dead && distToPlayer < 280;
+      const canSeePlayer = playerAware && hasLineOfSight(a.x, acy, pcx, pcy);
+
+      if (playerAware) {
+        a.aimAngle = Math.atan2(dy, dx);
+        a.facing = dx >= 0 ? 1 : -1;
+
+        if (canSeePlayer) {
+          if (distToPlayer > 80) moveDir = a.facing;
+          else if (distToPlayer < 35) moveDir = -a.facing;
+
+          a.shootCd--;
+          if (a.shootCd <= 0) {
+            const spd = 2.5;
+            const cosA = Math.cos(a.aimAngle);
+            const sinA = Math.sin(a.aimAngle);
+            const muzzleX = a.x + cosA * 6;
+            const muzzleY = acy + sinA * 6;
+
+            lasers.push({
+              x: muzzleX,
+              y: muzzleY,
+              vx: cosA * spd,
+              vy: sinA * spd,
+              life: 200,
+              green: true,
+            });
+            flashes.push({
+              x: muzzleX,
+              y: muzzleY,
+              r: 2.5, maxLife: 5, life: 5,
+              color: '#80ff40',
+            });
+            a.shootCd = 60 + ((Math.random() * 45) | 0);
+          }
+        } else {
+          moveDir = a.facing;
+
+          if (a.digCd <= 0) {
+            const hit = findFirstTerrainHit(a.x, acy, pcx, pcy);
+            if (hit) {
+              const digDist = Math.hypot(hit.x - a.x, hit.y - acy);
+              if (digDist < 80) {
+                const hx = hit.x, hy = hit.y;
+                carveCircle(hx, hy, 10, true);
+                flashes.push({ x: hx, y: hy, r: 8, maxLife: 7, life: 7, color: '#90ff40' });
+                addShake(0.04);
+                a.digCd = 20 + ((Math.random() * 16) | 0);
+
+                const cosA = Math.cos(a.aimAngle);
+                const sinA = Math.sin(a.aimAngle);
+                flashes.push({
+                  x: a.x + cosA * 6,
+                  y: acy + sinA * 6,
+                  r: 3, maxLife: 4, life: 4,
+                  color: '#80ff40'
+                });
+              }
+            }
+          }
+        }
+      } else {
+        a.patrolTimer--;
+        if (a.patrolTimer <= 0) {
+          a.facing = Math.random() < 0.5 ? 1 : -1;
+          a.patrolTimer = 90 + ((Math.random() * 120) | 0);
+        }
+        moveDir = a.facing;
+        a.aimAngle = a.facing > 0 ? 0 : Math.PI;
+      }
+
+      const checkFrontX = a.x + a.facing * 5;
+      const frontBlocked = alienCollidesAt(checkFrontX, a.y, a.w, a.h);
+      if (moveDir !== 0 && a.onGround) {
+        if (frontBlocked) {
+          wantJump = true;
+          if (playerAware && a.digCd <= 0) {
+            const digX = a.x + a.facing * 7;
+            const digY = a.y - a.h / 2;
+            carveCircle(digX, digY, 11, true);
+            flashes.push({ x: digX, y: digY, r: 9, maxLife: 6, life: 6, color: '#80ff40' });
+            addShake(0.05);
+            a.digCd = 16;
+          }
+        }
+        const frontGroundY = groundTopAt(Math.floor(checkFrontX));
+        if (frontGroundY > a.y + 12 || frontGroundY < 0) {
+          wantJump = true;
+        }
+      }
+
+      if (wantJump && a.onGround && a.jumpCharge === 0) {
+        a.jumpCharge = 4;
+      }
+      if (a.jumpCharge > 0 && a.onGround) {
+        a.jumpCharge--;
+        if (a.jumpCharge === 0) {
+          a.vy = -2.8;
+          a.onGround = false;
+        }
+      }
+
+      const targetVx = moveDir * 0.5;
+      a.vx = a.vx * 0.8 + targetVx * 0.2;
+
+      if (Math.abs(a.vx) > 0.1 && a.onGround) a.walkPhase++;
+      else if (a.onGround) a.walkPhase = 0;
+
+      a.vy += 0.18;
+      if (a.vy > 5) a.vy = 5;
+
+      let mx = a.vx;
+      const stepDir = mx > 0 ? 1 : -1;
+      let steps = Math.ceil(Math.abs(mx));
+      for (let s = 0; s < steps; s++) {
+        const tryX = a.x + stepDir;
+        if (!alienCollidesAt(tryX, a.y, a.w, a.h)) {
+          a.x = tryX;
+        } else {
+          let climbed = false;
+          for (let up = 1; up <= 4; up++) {
+            if (!alienCollidesAt(tryX, a.y - up, a.w, a.h)) {
+              a.x = tryX;
+              a.y -= up;
+              climbed = true;
+              break;
+            }
+          }
+          if (!climbed) {
+            a.vx = 0;
+            if (!playerAware) {
+              a.facing = -a.facing;
+              a.patrolTimer = 80;
+            }
+            break;
+          }
+        }
+      }
+
+      let my = a.vy;
+      const ydir = my > 0 ? 1 : -1;
+      let ysteps = Math.ceil(Math.abs(my));
+      a.onGround = false;
+      for (let s = 0; s < ysteps; s++) {
+        const tryY = a.y + ydir;
+        if (!alienCollidesAt(a.x, tryY, a.w, a.h)) {
+          a.y = tryY;
+        } else {
+          if (ydir > 0) a.onGround = true;
+          a.vy = 0;
+          break;
+        }
+      }
+
+      if (a.y > H + 40) {
+        groundAliens.splice(i, 1);
+        continue;
+      }
+      if (a.x < 10) { a.x = 10; a.facing = 1; }
+      if (a.x > WORLD_W - 10) { a.x = WORLD_W - 10; a.facing = -1; }
+    }
+  }
+
+  function renderGroundAliens() {
+    for (const a of groundAliens) {
+      const flash = a.hitFlash > 0;
+      const crouched = a.jumpCharge > 0;
+      const squish = crouched ? 1 : 0;
+      const calm = !crouched && a.onGround;
+      const breathCycle = Math.sin(a.breathT * 0.08);
+      const breathBob = calm && breathCycle > 0.5 ? 1 : 0;
+      const walking = a.walkPhase > 0 && a.onGround && !crouched;
+      const walkBob = walking && (((a.walkPhase >> 2) % 4) === 1) ? -1 : 0;
+
+      const ax = Math.floor(a.x - a.w / 2);
+      const ay = Math.floor(a.y - a.h) + squish + breathBob + walkBob;
+
+      ctx.fillStyle = flash ? '#fff' : '#0a200d';
+      ctx.fillRect(ax - 1, ay - 1, a.w + 2, 4);
+      ctx.fillStyle = flash ? '#fff' : '#1d5a22';
+      ctx.fillRect(ax, ay, a.w, 3);
+
+      const bodyTop = ay + 3;
+      const bodyBottom = Math.floor(a.y) - 2;
+      const bodyH = Math.max(1, bodyBottom - bodyTop);
+
+      ctx.fillStyle = flash ? '#fff' : '#08170b';
+      ctx.fillRect(ax - 1, bodyTop - 1, a.w + 2, bodyH + 2);
+      ctx.fillStyle = flash ? '#fff' : '#2ea034';
+      ctx.fillRect(ax, bodyTop, a.w, bodyH);
+
+      ctx.fillStyle = flash ? '#fff' : '#144018';
+      for (let r = 0; r < bodyH; r += 2) {
+        ctx.fillRect(ax + 1, bodyTop + r, a.w - 2, 1);
+      }
+
+      const eyeX = a.facing > 0 ? ax + a.w - 2 : ax + 1;
+      const blink = Math.sin(a.breathT * 0.05) > 0.96;
+      if (!blink) {
+        ctx.fillStyle = flash ? '#fff' : '#ff2a30';
+        ctx.fillRect(eyeX, ay + 1, 1, 1);
+      } else {
+        ctx.fillStyle = '#0a200d';
+        ctx.fillRect(eyeX, ay + 1, 1, 1);
+      }
+
+      const shoulderX = a.x;
+      const shoulderY = bodyTop + 1;
+      const drilling = a.digCd > 10;
+
+      ctx.save();
+      ctx.translate(shoulderX, shoulderY);
+      ctx.rotate(a.aimAngle);
+      if (Math.cos(a.aimAngle) < 0) {
+        ctx.scale(1, -1);
+      }
+      ctx.fillStyle = flash ? '#fff' : (drilling ? '#185020' : '#0d2810');
+      ctx.fillRect(0, -1.5, 5, 2.5);
+      ctx.fillStyle = flash ? '#fff' : (drilling ? '#c0ff60' : '#80ff40');
+      ctx.fillRect(3, -0.5, 2, 1.5);
+      ctx.restore();
+
+      ctx.fillStyle = flash ? '#fff' : '#0f3314';
+      const legY = bodyBottom;
+      const baseBottom = Math.floor(a.y);
+      const legLeftX  = ax + 1;
+      const legRightX = ax + a.w - 2;
+
+      function alienLegFootY(col, top) {
+        if (!a.onGround) return baseBottom;
+        if (col < 0 || col >= WORLD_W) return baseBottom;
+        const minY = top + 1;
+        const maxY = baseBottom + 3;
+        for (let yy = minY; yy <= maxY; yy++) {
+          if (yy >= H) return yy;
+          if (yy >= 0 && grid[idx(col, yy)] === 1) return yy;
+        }
+        return baseBottom;
+      }
+
+      function drawAlienLeg(col, top) {
+        const foot = alienLegFootY(col, top);
+        const h = Math.max(1, foot - top);
+        ctx.fillRect(col, top, 1, h);
+        ctx.fillStyle = flash ? '#fff' : '#80ff40';
+        ctx.fillRect(col + a.facing, top + h - 1, 1, 1);
+        ctx.fillStyle = flash ? '#fff' : '#0f3314';
+      }
+
+      if (crouched) {
+        drawAlienLeg(legLeftX,  legY + 1);
+        drawAlienLeg(legRightX, legY + 1);
+      } else if (!a.onGround) {
+        ctx.fillRect(legLeftX,  legY + 1, 1, 2);
+        ctx.fillRect(legRightX, legY + 1, 1, 2);
+      } else if (Math.abs(a.vx) > 0.05) {
+        const phase = (a.walkPhase >> 2) & 1;
+        const frontDX = a.facing;
+        const backDX  = -a.facing;
+        if (phase === 0) {
+          drawAlienLeg(legLeftX  + frontDX, legY);
+          drawAlienLeg(legRightX + backDX,  legY + 1);
+        } else {
+          drawAlienLeg(legLeftX  + backDX,  legY + 1);
+          drawAlienLeg(legRightX + frontDX, legY);
+        }
+      } else {
+        drawAlienLeg(legLeftX,  legY);
+        drawAlienLeg(legRightX, legY);
+      }
+
+      if (a.hp < a.maxHp) {
+        const hpW = a.w + 3;
+        const hpx = Math.floor(a.x - hpW / 2);
+        const hpy = ay - 4;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(hpx - 1, hpy - 1, hpW + 2, 3);
+        ctx.fillStyle = '#40ff50';
+        ctx.fillRect(hpx, hpy, Math.round((a.hp / a.maxHp) * hpW), 1);
+      }
+    }
+  }
+
   function render() {
     if (!controlMode) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -613,11 +1157,11 @@
       return;
     }
 
-    const SHAKE_MAX = 5;
+    const SHAKE_MAX = 1.2;
     const s = shakeTrauma * shakeTrauma;
     const shakeX = (Math.random() * 2 - 1) * SHAKE_MAX * s;
     const shakeY = (Math.random() * 2 - 1) * SHAKE_MAX * s;
-    const scale = 1 + 0.05 * s;
+    const scale = 1 + 0.01 * s;
     ctx.setTransform(scale, 0, 0, scale,
       shakeX - (scale - 1) * (W / 2),
       shakeY - (scale - 1) * (H / 2));
@@ -713,6 +1257,8 @@
     }
 
     renderCasings();
+    renderAlienGibs();
+    renderGroundAliens();
     renderUfos();
     renderUfoDebris();
     renderHullDebris();
@@ -753,9 +1299,9 @@
       ctx.beginPath(); ctx.arc(b.x, b.y, 0.9, 0, Math.PI * 2); ctx.fill();
     }
 
-    ctx.fillStyle = '#c8121a';
     for (const b of bloods) {
-      ctx.fillRect(Math.floor(b.x), Math.floor(b.y), 1, 1);
+      ctx.fillStyle = b.green ? '#60ff20' : '#c8121a';
+      ctx.fillRect(Math.floor(b.x), Math.floor(b.y), b.green ? 2 : 1, b.green ? 2 : 1);
     }
 
     for (const r of rockets) {
@@ -941,10 +1487,10 @@
       const adx = mouseX - gx0, ady = mouseY - gy0;
       const ang = Math.atan2(ady, adx);
       const recoilT = Math.min(1, fireShakeRamp / FIRE_RAMP_TICKS);
-      const jitterAmt = recoilT * 1.5;
+      const jitterAmt = recoilT * 0.4;
       const jx = (Math.random() * 2 - 1) * jitterAmt;
       const jy = (Math.random() * 2 - 1) * jitterAmt;
-      const jr = (Math.random() * 2 - 1) * recoilT * 0.12;
+      const jr = (Math.random() * 2 - 1) * recoilT * 0.04;
       ctx.save();
       ctx.translate(gx0 + jx, gy0 + jy);
       ctx.rotate(ang + jr);
@@ -1104,6 +1650,19 @@
           const ty = Math.floor(u.y + hh) + 2;
           ctx.fillStyle = '#000'; ctx.fillText(dist + 'm', tx + 1, ty + 1);
           ctx.fillStyle = '#ffffff'; ctx.fillText(dist + 'm', tx, ty);
+        }
+        for (const a of groundAliens) {
+          if (a.dead) continue;
+          const hw = (a.w + 4) / 2, hh = (a.h + 4) / 2;
+          ctx.globalAlpha = flashAlpha;
+          ctx.strokeStyle = '#40ff50'; ctx.lineWidth = 1;
+          drawTargetBox(a.x, a.y - a.h / 2, hw, hh, 2);
+          ctx.globalAlpha = 1;
+          const dist = Math.floor(Math.hypot(a.x - guidedRocket.x, a.y - guidedRocket.y));
+          const tx = Math.floor(a.x);
+          const ty = Math.floor(a.y) + 2;
+          ctx.fillStyle = '#000'; ctx.fillText(dist + 'm', tx + 1, ty + 1);
+          ctx.fillStyle = '#40ff50'; ctx.fillText(dist + 'm', tx, ty);
         }
         ctx.textAlign = 'start';
         ctx.textBaseline = 'alphabetic';
@@ -1428,6 +1987,8 @@
       lasers.length = 0;
       packs.length = 0;
       casings.length = 0;
+      groundAliens.length = 0;
+      alienGibs.length = 0;
       spawnCavePacks(caves);
       gameStartMs = Date.now();
       finalElapsedMs = null;
@@ -1555,10 +2116,12 @@
   let fireShakeRamp = 0;
   const FIRE_RAMP_TICKS = 120;
 
-  function addShake(amount) { shakeTrauma = Math.min(1, shakeTrauma + amount); }
+  function addShake(amount) {
+    shakeTrauma = Math.min(0.5, shakeTrauma + amount * 0.35);
+  }
   function addFireShake(amount) {
     const t = Math.min(1, fireShakeRamp / FIRE_RAMP_TICKS);
-    addShake(amount * (0.05 + 0.95 * t));
+    addShake(amount * (0.02 + 0.18 * t));
   }
 
   function fireBullet() {
@@ -1582,7 +2145,7 @@
       color: '#ffe066',
     });
     spawnCasing(muzzleX, muzzleY, dx >= 0 ? 1 : -1);
-    addFireShake(0.75);
+    addFireShake(0.15);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1631,6 +2194,7 @@
   function bisectUfo(u, beamX, beamY, beamUx, beamUy) {
     const idx2 = ufos.indexOf(u);
     if (idx2 !== -1) ufos.splice(idx2, 1);
+    ejectCrewFromUfo(u);
     ufoDeathExplosion(u);
     killCount++;
     hits++;
@@ -1697,7 +2261,7 @@
       }
       if (hitGround || d.life <= 0 || d.x < -30 || d.x > WORLD_W + 30) {
         if (hitGround) {
-          explode(d.x, Math.min(H - 1, d.y + UFO_H / 2), 10, 30, 25, 0.4);
+          explode(d.x, Math.min(H - 1, d.y + UFO_H / 2), 10, 30, 25, 0.15);
         }
         ufoDebris.splice(i, 1);
         continue;
@@ -1754,16 +2318,26 @@
     const MAX_STEPS = Math.ceil(Math.hypot(W, H));
     let endX = x0, endY = y0;
     const bisectedThisFire = new Set();
+    const hitAliensThisFire = new Set();
+
     for (let s = 1; s <= MAX_STEPS; s++) {
       const px = x0 + ux * s;
       const py = y0 + uy * s;
       if (px < 0 || px >= WORLD_W || py >= H || py < -20) { endX = px; endY = py; break; }
       endX = px; endY = py;
+
       const u = ufoAt(px, py);
       if (u && !bisectedThisFire.has(u)) {
         bisectedThisFire.add(u);
         bisectUfo(u, px, py, ux, uy);
       }
+
+      const a = groundAlienAt(px, py);
+      if (a && !hitAliensThisFire.has(a)) {
+        hitAliensThisFire.add(a);
+        damageGroundAlien(a, 999, ux * 3, uy * 3);
+      }
+
       if (py >= 0) {
         const gx = Math.floor(px), gy = Math.floor(py);
         if (gx >= 0 && gx < WORLD_W && grid[idx(gx, gy)] === 1) {
@@ -1773,7 +2347,7 @@
     }
     detachFloatingChunks();
     playerBeams.push({ x0, y0, x1: endX, y1: endY, life: 14, maxLife: 14 });
-    addFireShake(1.0);
+    addFireShake(0.2);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1855,7 +2429,7 @@
       r: 3, maxLife: 4, life: 4,
       color: '#caa070',
     });
-    addFireShake(0.25);
+    addFireShake(0.05);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1883,7 +2457,7 @@
       r: 4, maxLife: 5, life: 5,
       color: '#ffe066',
     });
-    addFireShake(0.85);
+    addFireShake(0.18);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1911,7 +2485,7 @@
       r: 4.5, maxLife: 5, life: 5,
       color: '#ffe066',
     });
-    addFireShake(0.9);
+    addFireShake(0.2);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1939,7 +2513,7 @@
       r: 5, maxLife: 5, life: 5,
       color: '#ffe066',
     });
-    addFireShake(1.0);
+    addFireShake(0.22);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1952,6 +2526,8 @@
     const MAX_STEPS = Math.ceil(Math.hypot(W, H));
     let endX = x0, endY = y0;
     const hitUfos = new Set();
+    const hitGroundAliens = new Set();
+
     for (let s = 1; s <= MAX_STEPS; s++) {
       const px = x0 + ux * s;
       const py = y0 + uy * s;
@@ -1962,6 +2538,11 @@
         hitUfos.add(u);
         bisectUfo(u, px, py, ux, uy);
       }
+      const a = groundAlienAt(px, py);
+      if (a && !hitGroundAliens.has(a)) {
+        hitGroundAliens.add(a);
+        damageGroundAlien(a, 999, ux * 3, uy * 3);
+      }
       if (py >= 0) {
         const gx = Math.floor(px), gy = Math.floor(py);
         if (gx >= 0 && gx < WORLD_W && grid[idx(gx, gy)] === 1) {
@@ -1971,7 +2552,7 @@
     }
     detachFloatingChunks();
     blueBeams.push({ x0, y0, x1: endX, y1: endY, life: 4, maxLife: 4 });
-    addFireShake(0.4);
+    addFireShake(0.08);
     player.facing = dx >= 0 ? 1 : -1;
   }
 
@@ -1979,7 +2560,7 @@
     for (let i = flashes.length - 1; i >= 0; i--) {
       if (--flashes[i].life <= 0) flashes.splice(i, 1);
     }
-    shakeTrauma = Math.max(0, shakeTrauma - 0.06);
+    shakeTrauma = Math.max(0, shakeTrauma - 0.1);
   }
 
   const hullDebris = [];
@@ -2030,7 +2611,7 @@
         if (gy >= 0 && grid[idx(gx, gy)] === 1) {
           const px = Math.floor(b.x), py = Math.floor(b.y);
           if (inBounds(px, py)) {
-            tctx.fillStyle = '#a01020';
+            tctx.fillStyle = b.green ? '#20a010' : '#a01020';
             tctx.fillRect(px, py, 1, 1);
           }
           dead = true; break;
@@ -2046,8 +2627,10 @@
     carveCircle(x, y, craterR, true);
     flashes.push({ x, y, r: craterR * 0.65, maxLife: 14, life: 14, color: '#fff2a8', explosion: true });
     flashes.push({ x, y, r: craterR * 0.82, maxLife: 18, life: 18, color: '#ff8a3a', explosion: true });
-    addShake(shake);
+    addShake(shake * 0.3);
     explodeAffectBalls(x, y, blastR);
+
+    // Damage player
     const pcx = player.x, pcy = player.y - player.h / 2;
     const ddx = pcx - x, ddy = pcy - y;
     const dist = Math.hypot(ddx, ddy);
@@ -2070,9 +2653,39 @@
           vx: Math.cos(ang) * speed,
           vy: Math.sin(ang) * speed - Math.random() * 1.5,
           life: 60 + (Math.random() * 40) | 0,
+          green: false,
         });
       }
     }
+
+    // Damage Ground Aliens
+    for (const a of groundAliens) {
+      if (a.dead) continue;
+      const adx = a.x - x;
+      const ady = (a.y - a.h / 2) - y;
+      const adist = Math.hypot(adx, ady);
+      if (adist < blastR) {
+        const intensity = 1 - adist / blastR;
+        const dmg = Math.round(maxDmg * intensity * 0.8 + 2);
+        const knock = adist || 1;
+        damageGroundAlien(a, dmg, (adx / knock) * (2 + intensity * 3), -1.5 - intensity * 2);
+      }
+    }
+
+    // Affect severed alien gibs
+    for (const g of alienGibs) {
+      const gdx = g.x - x, gdy = g.y - y;
+      const gdist = Math.hypot(gdx, gdy);
+      if (gdist < blastR) {
+        const intensity = 1 - gdist / blastR;
+        const gLen = gdist || 1;
+        g.vx += (gdx / gLen) * (2 + intensity * 4);
+        g.vy -= 1 + intensity * 3;
+        g.angVel += (Math.random() - 0.5) * 0.5;
+        g.landed = false;
+      }
+    }
+
     for (let i = packs.length - 1; i >= 0; i--) {
       const p = packs[i];
       if (p.kind !== 'health') continue;
@@ -2099,7 +2712,7 @@
       }
     }
     for (const det of detonateQueue) {
-      explode(det.x, det.y, 8, 25, 20, 0.4);
+      explode(det.x, det.y, 8, 25, 20, 0.1);
     }
   }
 
@@ -2121,7 +2734,7 @@
     rockets.push(r);
     guidedRocket = r;
     player.facing = dx >= 0 ? 1 : -1;
-    addFireShake(0.3);
+    addFireShake(0.1);
   }
 
   function updateRockets() {
@@ -2175,22 +2788,33 @@
         r.y += r.vy / steps;
         const gx = Math.floor(r.x), gy = Math.floor(r.y);
         if (gx < 0 || gx >= WORLD_W || gy >= H) { hit = true; break; }
-        { const u = ufoAt(r.x, r.y); if (u) {
-          const biteR = 2.0 + Math.random() * 1.5;
-          u.bites.push({ lx: r.x - u.x, ly: r.y - u.y, r: biteR });
-          for (let k = 0; k < 4 + Math.floor(Math.random() * 3); k++) {
-            spawnHullChunk(r.x, r.y, (Math.random() - 0.5) * 2.0, 0.3 + Math.random() * 1.2);
+        {
+          const a = groundAlienAt(r.x, r.y);
+          if (a) {
+            damageGroundAlien(a, 35, r.vx * 0.5, -1);
+            hit = true; break;
           }
-          const rsp = Math.hypot(r.vx, r.vy) || 1;
-          const shuntX = (r.vx / rsp) * 1.8;
-          const shuntY = (r.vy / rsp) * 0.8;
-          damageUfo(u, Math.ceil(u.maxHp * 0.8), shuntX, shuntY); hit = true; break;
-        } }
+        }
+        {
+          const u = ufoAt(r.x, r.y);
+          if (u) {
+            const biteR = 2.0 + Math.random() * 1.5;
+            u.bites.push({ lx: r.x - u.x, ly: r.y - u.y, r: biteR });
+            for (let k = 0; k < 4 + Math.floor(Math.random() * 3); k++) {
+              spawnHullChunk(r.x, r.y, (Math.random() - 0.5) * 2.0, 0.3 + Math.random() * 1.2);
+            }
+            const rsp = Math.hypot(r.vx, r.vy) || 1;
+            const shuntX = (r.vx / rsp) * 1.8;
+            const shuntY = (r.vy / rsp) * 0.8;
+            damageUfo(u, Math.ceil(u.maxHp * 0.8), shuntX, shuntY);
+            hit = true; break;
+          }
+        }
         if (gy >= 0 && grid[idx(gx, gy)] === 1) { hit = true; break; }
       }
       r.life--;
       if (hit || r.life <= 0) {
-        explode(r.x, r.y, 15, 45, 55, 0.85);
+        explode(r.x, r.y, 15, 45, 55, 0.25);
         if (r === guidedRocket) guidedRocket = null;
         rockets.splice(i, 1);
       }
@@ -2201,8 +2825,7 @@
   function throwGrenade(power, fuse) {
     const mx0 = player.x;
     const my0 = player.y - player.h / 2;
-    const dx = mouseX - mx0;
-    const dy = mouseY - my0;
+    const dx = mouseX - mx0, dy = mouseY - my0;
     const len = Math.hypot(dx, dy) || 1;
     grenades.push({
       x: mx0,
@@ -2247,7 +2870,7 @@
 
       g.fuse--;
       if (g.fuse <= 0) {
-        explode(g.x, g.y, 22, 60, 70, 0.85);
+        explode(g.x, g.y, 22, 60, 70, 0.28);
         grenades.splice(i, 1);
       }
     }
@@ -2439,6 +3062,13 @@
           if (ballHit) { hit = true; break; }
         }
         {
+          const a = groundAlienAt(b.x, b.y);
+          if (a) {
+            damageGroundAlien(a, 1, b.vx * 0.2, -0.4);
+            hit = true; break;
+          }
+        }
+        {
           const u = ufoAt(b.x, b.y);
           if (u) {
             const biteR = 1.0 + Math.random() * 1.0;
@@ -2476,7 +3106,7 @@
             if (Math.abs(b.x - L.x) < 3 && Math.abs(b.y - L.y) < 3) {
               const lx = L.x, ly = L.y;
               lasers.splice(li, 1);
-              explode(lx, ly, 8, 25, 20, 0.4);
+              explode(lx, ly, 8, 25, 20, 0.1);
               laserHit = true; break;
             }
           }
@@ -2801,12 +3431,14 @@
 
   const HEAL_AMOUNT = 35;
   const packs = [];
-  function spawnPack(x, kind) {
+  function spawnPack(x, kind, y) {
     packs.push({
       x: Math.max(8, Math.min(WORLD_W - 8, x | 0)),
-      y: -6, vy: 0,
+      y: y !== undefined ? y : -6,
+      vy: y !== undefined ? -1.0 : 0,
       bob: Math.random() * 6.28,
-      idle: 0, landed: false,
+      idle: 0,
+      landed: false,
       kind: kind || 'health',
     });
   }
@@ -2938,12 +3570,16 @@
   const lasers = [];
 
   function waveSpec(i) {
-    return { count: DEBUG ? 1 : 1 + i * 2, hpMult: i + 1 };
+    return {
+      count: DEBUG ? 1 : 1 + i * 2,
+      hpMult: i + 1,
+      groundAliens: 1 + Math.floor(i * 1.5)
+    };
   }
   let waveIndex = 0;
   let interWaveDelay = 0;
 
-  function spawnWave(count, hpMult) {
+  function spawnWave(count, hpMult, alienCount) {
     waveBannerText = 'WAVE ' + (waveIndex + 1);
     waveBannerTime = 120;
     const yMin = 14, yMax = 96;
@@ -2976,16 +3612,24 @@
         green: isGreen,
       });
     }
+
+    const gCount = alienCount || 1;
+    for (let i = 0; i < gCount; i++) {
+      const gx = 40 + Math.random() * (WORLD_W - 80);
+      spawnGroundAlien(gx, undefined, 0, 0, 12 + waveIndex * 2);
+    }
   }
 
   function resetWaves() {
     ufos.length = 0;
     ufoDebris.length = 0;
+    groundAliens.length = 0;
+    alienGibs.length = 0;
     waveIndex = 0;
     dayProgress = 0;
     interWaveDelay = 0;
     const w = waveSpec(0);
-    spawnWave(w.count, w.hpMult);
+    spawnWave(w.count, w.hpMult, w.groundAliens);
   }
 
   function damageUfo(u, dmg, shuntVx, shuntVy) {
@@ -3011,6 +3655,7 @@
         spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
         nextDropIndex++;
       }
+      ejectCrewFromUfo(u);
       ufoDeathExplosion(u);
     }
   }
@@ -3019,7 +3664,7 @@
   function ufoDeathExplosion(dead) {
     flashes.push({ x: dead.x, y: dead.y, r: 12, maxLife: 10, life: 10, color: '#ffcc44', explosion: true });
     flashes.push({ x: dead.x, y: dead.y, r: 16, maxLife: 14, life: 14, color: '#ff6622', explosion: true });
-    addShake(0.3);
+    addShake(0.12);
     for (const u of ufos) {
       if (u === dead || u.state !== 'alive') continue;
       const dx = u.x - dead.x;
@@ -3044,6 +3689,7 @@
           spawnPack(u.x + (Math.random() - 0.5) * 20, WEAPON_DROPS[nextDropIndex].kind);
           nextDropIndex++;
         }
+        ejectCrewFromUfo(u);
       }
     }
   }
@@ -3104,7 +3750,7 @@
           }
         }
         if (inTerrain || u.y > H + 20) {
-          explode(u.x, Math.min(H - 1, belly), 22, 60, 70, 1.0);
+          explode(u.x, Math.min(H - 1, belly), 22, 60, 70, 0.3);
           if (Math.random() < 0.6) spawnPack(u.x + (Math.random() - 0.5) * 40);
           ufos.splice(i, 1);
         }
@@ -3160,12 +3806,12 @@
         }
       }
     }
-    if (ufos.length === 0) {
+    if (ufos.length === 0 && groundAliens.length === 0) {
       if (interWaveDelay <= 0) interWaveDelay = 180;
       else if (--interWaveDelay === 0) {
         waveIndex++;
         const w = waveSpec(waveIndex);
-        spawnWave(w.count, w.hpMult);
+        spawnWave(w.count, w.hpMult, w.groundAliens);
       }
     }
   }
@@ -3204,13 +3850,13 @@
             }
             if (L.pierced >= PIERCE_MAX_PX) {
               flashes.push({ x: gx, y: gy, r: 3, maxLife: 6, life: 6, color: '#80ff80' });
-              addShake(0.2);
+              addShake(0.06);
               dead = true; break;
             }
           } else {
             carveCircle(gx, gy, 4, true);
             flashes.push({ x: gx, y: gy, r: 4, maxLife: 6, life: 6, color: '#ff5050' });
-            addShake(0.35);
+            addShake(0.12);
             dead = true; break;
           }
         }
@@ -3231,6 +3877,7 @@
                 x: pcx, y: pcy + (Math.random() - 0.5) * 4,
                 vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 0.5,
                 life: 60,
+                green: false,
               });
             }
             dead = true; break;
@@ -3482,12 +4129,14 @@
       updateBushes();
       updateChunks();
       updateCasings();
+      updateAlienGibs();
       updatePlayer();
       updateCamera();
       updateBullets();
       updateRockets();
       updateGrenades();
       updatePhysBalls();
+      updateGroundAliens();
       updateUfos();
       updateUfoDebris();
       updateHullDebris();
